@@ -162,7 +162,7 @@ router.get('/:id/members-detail', async (req, res) => {
         [req.params.id]
       ),
       pool.execute(
-        `SELECT p.id, p.username, p.avatar_url, p.theme, p.created_at FROM profiles p
+        `SELECT p.id, p.username, p.avatar_url, p.theme, p.status, p.created_at FROM profiles p
          WHERE p.id IN (SELECT user_id FROM server_members WHERE server_id = ?)`,
         [req.params.id]
       ),

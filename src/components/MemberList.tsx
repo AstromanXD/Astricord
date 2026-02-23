@@ -236,7 +236,8 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
   }
 
   const MemberRow = ({ m, color }: { m: MemberWithRoles; color?: string }) => {
-    const isOnline = onlineUserIds.has(m.userId)
+    const profileStatus = (m.profile as { status?: string | null }).status
+    const isOnline = onlineUserIds.has(m.userId) && profileStatus !== 'offline'
     const rowRef = useRef<HTMLDivElement>(null)
     return (
     <div
@@ -281,7 +282,9 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     )
   }
 
-  const onlineCount = members.filter((m) => onlineUserIds.has(m.userId)).length
+  const onlineCount = members.filter(
+    (m) => onlineUserIds.has(m.userId) && (m.profile as { status?: string | null }).status !== 'offline'
+  ).length
 
   const groupByRole = (list: MemberWithRoles[]) => {
     const grouped = new Map<string, MemberWithRoles[]>()
@@ -299,8 +302,10 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     return { grouped, noRole }
   }
 
-  const onlineMembers = members.filter((m) => onlineUserIds.has(m.userId))
-  const offlineMembers = members.filter((m) => !onlineUserIds.has(m.userId))
+  const isDisplayOnline = (m: MemberWithRoles) =>
+    onlineUserIds.has(m.userId) && (m.profile as { status?: string | null }).status !== 'offline'
+  const onlineMembers = members.filter(isDisplayOnline)
+  const offlineMembers = members.filter((m) => !isDisplayOnline(m))
   const { grouped: onlineByRole, noRole: onlineNoRole } = groupByRole(onlineMembers)
   const { grouped: offlineByRole, noRole: offlineNoRole } = groupByRole(offlineMembers)
 
@@ -387,7 +392,10 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
           x={profilePopover.x}
           y={profilePopover.y}
           member={profilePopover.member}
-          isOnline={onlineUserIds.has(profilePopover.member.userId)}
+          isOnline={
+            onlineUserIds.has(profilePopover.member.userId) &&
+            (profilePopover.member.profile as { status?: string | null }).status !== 'offline'
+          }
           isSelf={profilePopover.member.userId === user?.id}
           onClose={() => setProfilePopover(null)}
           onOpenDm={onOpenDm}

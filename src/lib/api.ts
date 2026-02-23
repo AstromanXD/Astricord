@@ -138,7 +138,9 @@ export function useBackendRealtime(
     ws.addEventListener('message', handler)
     return () => {
       ws.removeEventListener('message', handler)
-      ws.send(JSON.stringify({ type: 'unsubscribe', channel: channelName }))
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'unsubscribe', channel: channelName }))
+      }
       ws.close()
     }
   }, [channelName])
@@ -201,6 +203,10 @@ export async function searchProfiles(q: string): Promise<ApiProfile[]> {
   return api<ApiProfile[]>(`/api/profiles/search?q=${encodeURIComponent(q.trim())}`)
 }
 
+export async function blockUser(blockedUserId: string) {
+  return api('/api/profiles/block', { method: 'POST', body: JSON.stringify({ blocked_user_id: blockedUserId }) })
+}
+
 export async function updateProfile(data: Partial<{ username: string; avatar_url: string; theme: string; status: string; status_message: string; custom_status: string }>) {
   return api<ApiProfile>('/api/profiles/me', { method: 'PATCH', body: JSON.stringify(data) })
 }
@@ -226,6 +232,19 @@ export const servers = {
   join: (code: string) => api<ApiServer>('/api/servers/join', { method: 'POST', body: JSON.stringify({ code }) }),
   getPermissions: (id: string) => api<{ isAdmin: boolean }>(`/api/servers/${id}/permissions`),
   getMembers: (id: string) => api<string[]>(`/api/servers/${id}/members`),
+  getMembersDetail: (id: string) =>
+    api<{ members: { userId: string; profile: ApiProfile; roles: { id: string; name: string; color: string; position: number }[] }[]; roles: { id: string; name: string; color: string; position: number }[] }>(
+      `/api/servers/${id}/members-detail`
+    ),
+  kickMember: (serverId: string, userId: string) =>
+    api(`/api/servers/${serverId}/members/${userId}`, { method: 'DELETE' }),
+  banMember: (serverId: string, userId: string) =>
+    api(`/api/servers/${serverId}/members/${userId}/ban`, { method: 'POST' }),
+  toggleMemberRole: (serverId: string, userId: string, roleId: string, add: boolean) =>
+    api(`/api/servers/${serverId}/members/${userId}/roles`, {
+      method: 'PATCH',
+      body: JSON.stringify({ role_id: roleId, add }),
+    }),
   getRoleColors: (id: string, userIds: string[]) =>
     userIds.length ? api<Record<string, string>>(`/api/servers/${id}/role-colors?userIds=${userIds.join(',')}`).catch(() => ({})) : Promise.resolve({}),
 }

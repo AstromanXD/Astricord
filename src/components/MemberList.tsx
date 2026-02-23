@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Profile, ServerRole } from '../lib/supabase'
+import { useBackend, servers, blockUser } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useServerPermissions } from '../hooks/useServerPermissions'
@@ -23,6 +24,7 @@ interface MemberListProps {
 
 export function MemberList({ serverId, onOpenDm }: MemberListProps) {
   const { user } = useAuth()
+  const backend = useBackend()
   const { onlineUserIds } = usePresence()
   const { isAdmin } = useServerPermissions(serverId)
   const [members, setMembers] = useState<MemberWithRoles[]>([])
@@ -44,57 +46,66 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     const load = async () => {
       setLoading(true)
 
-      await supabase.rpc('join_server', { p_server_id: serverId })
-
-      const [rolesRes, membersRes, memberRolesRes] = await Promise.all([
-        supabase.from('server_roles').select('*').eq('server_id', serverId).order('position', { ascending: false }),
-        supabase.from('server_members').select('user_id').eq('server_id', serverId),
-        supabase.from('server_member_roles').select('user_id, role_id').eq('server_id', serverId),
-      ])
-
-      const rolesList = (rolesRes.data ?? []) as ServerRole[]
-      setRoles(rolesList)
-      const roleMap = Object.fromEntries(rolesList.map((r) => [r.id, r]))
-
-      const memberIds = [...new Set((membersRes.data ?? []).map((m) => m.user_id))]
-      const rolesByUser = new Map<string, ServerRole[]>()
-      ;(memberRolesRes.data ?? []).forEach((mr) => {
-        const role = roleMap[mr.role_id]
-        if (role) {
-          const existing = rolesByUser.get(mr.user_id) ?? []
-          if (!existing.find((r) => r.id === role.id)) {
-            rolesByUser.set(mr.user_id, [...existing, role])
-          }
+      if (backend) {
+        try {
+          const data = await servers.getMembersDetail(serverId)
+          setRoles((data?.roles ?? []) as ServerRole[])
+          setMembers((data?.members ?? []) as MemberWithRoles[])
+        } catch {
+          setMembers([])
+          setRoles([])
         }
-      })
+      } else {
+        const [rolesRes, membersRes, memberRolesRes] = await Promise.all([
+          supabase.from('server_roles').select('*').eq('server_id', serverId).order('position', { ascending: false }),
+          supabase.from('server_members').select('user_id').eq('server_id', serverId),
+          supabase.from('server_member_roles').select('user_id, role_id').eq('server_id', serverId),
+        ])
 
-      if (memberIds.length === 0) {
-        setMembers([])
-        setLoading(false)
-        return
+        const rolesList = (rolesRes.data ?? []) as ServerRole[]
+        setRoles(rolesList)
+        const roleMap = Object.fromEntries(rolesList.map((r) => [r.id, r]))
+
+        const memberIds = [...new Set((membersRes.data ?? []).map((m) => m.user_id))]
+        const rolesByUser = new Map<string, ServerRole[]>()
+        ;(memberRolesRes.data ?? []).forEach((mr) => {
+          const role = roleMap[mr.role_id]
+          if (role) {
+            const existing = rolesByUser.get(mr.user_id) ?? []
+            if (!existing.find((r) => r.id === role.id)) {
+              rolesByUser.set(mr.user_id, [...existing, role])
+            }
+          }
+        })
+
+        if (memberIds.length === 0) {
+          setMembers([])
+          setLoading(false)
+          return
+        }
+
+        const { data: profiles } = await supabase.from('profiles').select('*').in('id', memberIds)
+        const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
+
+        const memberList: MemberWithRoles[] = memberIds.map((uid) => ({
+          userId: uid,
+          profile: profileMap[uid] ?? {
+            id: uid,
+            username: 'Unbekannt',
+            avatar_url: null,
+            theme: 'dark',
+            created_at: '',
+          },
+          roles: rolesByUser.get(uid) ?? [],
+        }))
+
+        setMembers(memberList)
       }
-
-      const { data: profiles } = await supabase.from('profiles').select('*').in('id', memberIds)
-      const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
-
-      const memberList: MemberWithRoles[] = memberIds.map((uid) => ({
-        userId: uid,
-        profile: profileMap[uid] ?? {
-          id: uid,
-          username: 'Unbekannt',
-          avatar_url: null,
-          theme: 'dark',
-          created_at: '',
-        },
-        roles: rolesByUser.get(uid) ?? [],
-      }))
-
-      setMembers(memberList)
       setLoading(false)
     }
 
     load()
-  }, [serverId, user?.id])
+  }, [serverId, user?.id, backend])
 
   const handleContextMenu = (e: React.MouseEvent, member: MemberWithRoles) => {
     e.preventDefault()
@@ -104,63 +115,91 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
 
   const handleKick = async (userId: string) => {
     if (!serverId || !user) return
-    const member = members.find((m) => m.userId === userId)
-    await supabase.from('server_member_roles').delete().eq('server_id', serverId).eq('user_id', userId)
-    await supabase.from('server_members').delete().eq('server_id', serverId).eq('user_id', userId)
-    await supabase.from('audit_log').insert({
-      server_id: serverId,
-      user_id: user.id,
-      action: 'member_kicked',
-      target_type: 'user',
-      target_id: userId,
-      details: { username: member?.profile.username },
-    })
-    setMembers((prev) => prev.filter((m) => m.userId !== userId))
-    setContextMenu(null)
+    if (backend) {
+      try {
+        await servers.kickMember(serverId, userId)
+        setMembers((prev) => prev.filter((m) => m.userId !== userId))
+        setContextMenu(null)
+      } catch (_) {}
+    } else {
+      await supabase.from('server_member_roles').delete().eq('server_id', serverId).eq('user_id', userId)
+      await supabase.from('server_members').delete().eq('server_id', serverId).eq('user_id', userId)
+      await supabase.from('audit_log').insert({
+        server_id: serverId,
+        user_id: user.id,
+        action: 'member_kicked',
+        target_type: 'user',
+        target_id: userId,
+        details: { username: members.find((m) => m.userId === userId)?.profile.username },
+      })
+      setMembers((prev) => prev.filter((m) => m.userId !== userId))
+      setContextMenu(null)
+    }
   }
 
   const handleBlock = async (userId: string) => {
     if (!user) return
-    await supabase.from('blocked_users').insert({ user_id: user.id, blocked_user_id: userId })
+    if (backend) {
+      try {
+        await blockUser(userId)
+      } catch (_) {}
+    } else {
+      await supabase.from('blocked_users').insert({ user_id: user.id, blocked_user_id: userId })
+    }
     setContextMenu(null)
   }
 
   const handleBan = async (userId: string) => {
     if (!serverId || !user) return
-    const member = members.find((m) => m.userId === userId)
-    await supabase.from('server_bans').insert({
-      server_id: serverId,
-      user_id: userId,
-      banned_by: user.id,
-    })
-    await supabase.from('server_member_roles').delete().eq('server_id', serverId).eq('user_id', userId)
-    await supabase.from('server_members').delete().eq('server_id', serverId).eq('user_id', userId)
-    await supabase.from('audit_log').insert({
-      server_id: serverId,
-      user_id: user.id,
-      action: 'member_banned',
-      target_type: 'user',
-      target_id: userId,
-      details: { username: member?.profile.username },
-    })
-    setMembers((prev) => prev.filter((m) => m.userId !== userId))
-    setContextMenu(null)
+    if (backend) {
+      try {
+        await servers.banMember(serverId, userId)
+        setMembers((prev) => prev.filter((m) => m.userId !== userId))
+        setContextMenu(null)
+      } catch (_) {}
+    } else {
+      await supabase.from('server_bans').insert({
+        server_id: serverId,
+        user_id: userId,
+        banned_by: user.id,
+      })
+      await supabase.from('server_member_roles').delete().eq('server_id', serverId).eq('user_id', userId)
+      await supabase.from('server_members').delete().eq('server_id', serverId).eq('user_id', userId)
+      await supabase.from('audit_log').insert({
+        server_id: serverId,
+        user_id: user.id,
+        action: 'member_banned',
+        target_type: 'user',
+        target_id: userId,
+        details: { username: members.find((m) => m.userId === userId)?.profile.username },
+      })
+      setMembers((prev) => prev.filter((m) => m.userId !== userId))
+      setContextMenu(null)
+    }
   }
 
   const handleRoleToggle = async (roleId: string, add: boolean) => {
     if (!serverId || !contextMenu) return
-    if (add) {
-      await supabase.from('server_member_roles').insert({
-        server_id: serverId,
-        user_id: contextMenu.member.userId,
-        role_id: roleId,
-      })
+    if (backend) {
+      try {
+        await servers.toggleMemberRole(serverId, contextMenu.member.userId, roleId, add)
+      } catch (_) {
+        return
+      }
     } else {
-      await supabase.from('server_member_roles').delete().match({
-        server_id: serverId,
-        user_id: contextMenu.member.userId,
-        role_id: roleId,
-      })
+      if (add) {
+        await supabase.from('server_member_roles').insert({
+          server_id: serverId,
+          user_id: contextMenu.member.userId,
+          role_id: roleId,
+        })
+      } else {
+        await supabase.from('server_member_roles').delete().match({
+          server_id: serverId,
+          user_id: contextMenu.member.userId,
+          role_id: roleId,
+        })
+      }
     }
     setMembers((prev) =>
       prev.map((m) => {

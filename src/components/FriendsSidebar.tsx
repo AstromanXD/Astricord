@@ -31,6 +31,7 @@ interface FriendsSidebarProps {
 export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps) {
   const { user } = useAuth()
   const backend = useBackend()
+  const [tab, setTab] = useState<FriendsTab>('alle')
   const [friendsList, setFriendsList] = useState<FriendWithProfile[]>([])
   const [dms, setDms] = useState<DmWithProfile[]>([])
   const [searchQuery, setSearchQuery] = useState('')

@@ -26,6 +26,23 @@ router.get('/search', authMiddleware, async (req, res) => {
   }
 })
 
+router.post('/block', authMiddleware, async (req, res) => {
+  try {
+    const { blocked_user_id } = req.body
+    if (!blocked_user_id) return res.status(400).json({ error: 'blocked_user_id erforderlich' })
+    if (blocked_user_id === req.user.id) return res.status(400).json({ error: 'Kann sich nicht selbst blockieren' })
+
+    await pool.execute(
+      'INSERT IGNORE INTO blocked_users (user_id, blocked_user_id) VALUES (?, ?)',
+      [req.user.id, blocked_user_id]
+    )
+    res.status(204).send()
+  } catch (err) {
+    console.error('Block error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
 router.get('/:id', async (req, res) => {
   try {
     const [rows] = await pool.execute(

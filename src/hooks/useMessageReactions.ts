@@ -81,15 +81,51 @@ export function useMessageReactions(messageIds: string[]) {
 
   const toggleReaction = async (messageId: string, emoji: string) => {
     if (!user) return
-    if (backend) {
-      try {
-        await reactions.toggle(messageId, emoji)
-        fetchReactions()
-      } catch (_) {}
-      return
-    }
     const existing = reactionsByMessage[messageId]?.find((g) => g.emoji === emoji)
     const hasReacted = existing?.userIds.includes(user.id)
+
+    const applyOptimistic = (add: boolean) => {
+      setReactionsByMessage((prev) => {
+        const next = { ...prev }
+        const list = next[messageId] ?? []
+        if (add) {
+          const g = list.find((x) => x.emoji === emoji)
+          if (g) {
+            if (!g.userIds.includes(user.id)) {
+              next[messageId] = list.map((x) =>
+                x.emoji === emoji ? { ...x, userIds: [...x.userIds, user.id], count: x.count + 1 } : x
+              )
+            }
+          } else {
+            next[messageId] = [...list, { emoji, count: 1, userIds: [user.id] }]
+          }
+        } else {
+          const g = list.find((x) => x.emoji === emoji)
+          if (g) {
+            const newUserIds = g.userIds.filter((id) => id !== user.id)
+            if (newUserIds.length === 0) {
+              next[messageId] = list.filter((x) => x.emoji !== emoji)
+            } else {
+              next[messageId] = list.map((x) =>
+                x.emoji === emoji ? { ...x, userIds: newUserIds, count: newUserIds.length } : x
+              )
+            }
+          }
+        }
+        return next
+      })
+    }
+
+    if (backend) {
+      try {
+        applyOptimistic(!hasReacted)
+        await reactions.toggle(messageId, emoji)
+      } catch (_) {
+        applyOptimistic(hasReacted)
+      }
+      return
+    }
+    applyOptimistic(!hasReacted)
     if (hasReacted) {
       await supabase
         .from('message_reactions')
@@ -99,9 +135,8 @@ export function useMessageReactions(messageIds: string[]) {
         .eq('emoji', emoji)
     } else {
       const { error } = await supabase.from('message_reactions').insert({ message_id: messageId, user_id: user.id, emoji })
-      if (error?.code === '23505' || error?.message?.includes('duplicate')) fetchReactions()
+      if (error?.code === '23505' || error?.message?.includes('duplicate')) applyOptimistic(hasReacted)
     }
-    fetchReactions()
   }
 
   return { reactionsByMessage, toggleReaction }

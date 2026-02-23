@@ -7,6 +7,7 @@ import type { Profile, ServerEmoji } from '../lib/supabase'
 import type { ReactionGroup } from '../hooks/useMessageReactions'
 import { AudioPlayer } from './AudioPlayer'
 import { LinkEmbed, extractEmbedUrls } from './LinkEmbed'
+import { EmojiPicker } from './EmojiPicker'
 
 const QUICK_REACTIONS = ['✅', '😂', '👍', '❤️', '😮', '🔥']
 
@@ -34,10 +35,15 @@ interface MessageProps {
   onReply?: () => void
   onOpenThread?: () => void
   onDelete?: () => void
-  /** Für Reaktions-EmojiPicker: wenn gesetzt, wird dieser Button als Anchor genutzt */
-  reactionPickerActive?: boolean
+  /** Reaktions-EmojiPicker */
+  showReactionPicker?: boolean
   reactionPickerButtonRef?: React.RefObject<HTMLButtonElement | null>
   onOpenReactionPicker?: () => void
+  onReactionSelect?: (emoji: string) => void
+  onReactionPickerClose?: () => void
+  serverEmojisForPicker?: ServerEmoji[]
+  serverNameForPicker?: string
+  onOpenEmojiSettings?: () => void
 }
 
 function formatTime(dateStr: string) {
@@ -118,7 +124,7 @@ function renderContent(content: string, serverEmojis: ServerEmoji[] = []) {
   return parts.length > 0 ? parts : content
 }
 
-export const Message = memo(function Message({ message, profile, isOwn, serverEmojis = [], roleColor, parentMessage, onScrollToMessage, isHighlighted, onPin, onUnpin, reactions = [], onToggleReaction, onEdit, onReply, onOpenThread, onDelete, reactionPickerActive, reactionPickerButtonRef, onOpenReactionPicker }: MessageProps) {
+export const Message = memo(function Message({ message, profile, isOwn, serverEmojis = [], roleColor, parentMessage, onScrollToMessage, isHighlighted, onPin, onUnpin, reactions = [], onToggleReaction, onEdit, onReply, onOpenThread, onDelete, showReactionPicker, reactionPickerButtonRef, onOpenReactionPicker, onReactionSelect, onReactionPickerClose, serverEmojisForPicker = [], serverNameForPicker, onOpenEmojiSettings }: MessageProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(message.content)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
@@ -207,7 +213,7 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
           {isEdited && <span className="text-xs text-[var(--text-muted)]">(bearbeitet)</span>}
         </div>
         {hasActions && (
-          <div className="absolute right-0 top-0 flex gap-0.5 py-1.5 px-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex gap-0.5 py-1.5 px-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] opacity-0 group-hover:opacity-100 transition-opacity w-fit mb-0.5">
             {onToggleReaction && QUICK_REACTIONS.slice(0, 3).map((emoji) => (
               <button
                 key={emoji}
@@ -230,15 +236,29 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
               </button>
             )}
             {onToggleReaction && onOpenReactionPicker && (
-              <button
-                ref={reactionPickerActive ? reactionPickerButtonRef : undefined}
-                type="button"
-                onClick={onOpenReactionPicker}
-                className="p-1.5 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                title="Emoji auswählen"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-              </button>
+              <div className="relative">
+                <button
+                  ref={showReactionPicker ? reactionPickerButtonRef : undefined}
+                  type="button"
+                  onClick={onOpenReactionPicker}
+                  className="p-1.5 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  title="Emoji auswählen"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </button>
+                {showReactionPicker && onReactionSelect && onReactionPickerClose && (
+                  <EmojiPicker
+                    serverEmojis={serverEmojisForPicker}
+                    serverName={serverNameForPicker}
+                    initialTab="emojis"
+                    onSelect={(emoji) => onReactionSelect(emoji)}
+                    onSelectCustom={(name) => onReactionSelect(`:${name}:`)}
+                    onClose={onReactionPickerClose}
+                    onAddEmoji={onOpenEmojiSettings}
+                    anchorRef={reactionPickerButtonRef!}
+                  />
+                )}
+              </div>
             )}
             {onReply && (
               <button

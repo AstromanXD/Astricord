@@ -159,7 +159,7 @@ export function EmojiPicker({
   return (
     <div
       ref={pickerRef}
-      className="absolute bottom-full right-0 mb-2 w-[352px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] shadow-2xl overflow-hidden z-50"
+      className="absolute top-full left-0 mt-1 w-[352px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] shadow-2xl overflow-hidden z-50"
     >
       {/* Tabs */}
       <div className="flex border-b border-[var(--border)]">

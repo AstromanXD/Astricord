@@ -569,9 +569,14 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                         onReply={() => setReplyToMessage(msg)}
                         onOpenThread={() => setThreadMessage(msg)}
                         onDelete={msg.user_id === user?.id ? () => handleDeleteMessage(msg) : undefined}
-                        reactionPickerActive={reactionPickerMessageId === msg.id}
+                        showReactionPicker={reactionPickerMessageId === msg.id}
                         reactionPickerButtonRef={reactionPickerButtonRef}
                         onOpenReactionPicker={() => setReactionPickerMessageId(msg.id)}
+                        onReactionSelect={(emoji) => { toggleReaction(msg.id, emoji); setReactionPickerMessageId(null) }}
+                        onReactionPickerClose={() => setReactionPickerMessageId(null)}
+                        serverEmojisForPicker={serverEmojis}
+                        serverNameForPicker={serverName}
+                        onOpenEmojiSettings={(channel?.server_id ?? serverId) && onOpenEmojiSettings ? () => onOpenEmojiSettings(channel?.server_id ?? serverId!) : undefined}
                       />
                     </div>
                   )
@@ -629,9 +634,14 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                     onReply={() => setReplyToMessage(msg)}
                     onOpenThread={() => setThreadMessage(msg)}
                     onDelete={msg.user_id === user?.id ? () => handleDeleteMessage(msg) : undefined}
-                    reactionPickerActive={reactionPickerMessageId === msg.id}
+                    showReactionPicker={reactionPickerMessageId === msg.id}
                     reactionPickerButtonRef={reactionPickerButtonRef}
                     onOpenReactionPicker={() => setReactionPickerMessageId(msg.id)}
+                    onReactionSelect={(emoji) => { toggleReaction(msg.id, emoji); setReactionPickerMessageId(null) }}
+                    onReactionPickerClose={() => setReactionPickerMessageId(null)}
+                    serverEmojisForPicker={serverEmojis}
+                    serverNameForPicker={serverName}
+                    onOpenEmojiSettings={(channel?.server_id ?? serverId) && onOpenEmojiSettings ? () => onOpenEmojiSettings(channel?.server_id ?? serverId!) : undefined}
                   />
                 </div>
               )
@@ -650,28 +660,6 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
         />
       )}
       </div>
-      {reactionPickerMessageId && (
-        <EmojiPicker
-          serverEmojis={serverEmojis}
-          serverName={serverName}
-          initialTab="emojis"
-          onSelect={(emoji) => {
-            toggleReaction(reactionPickerMessageId, emoji)
-            setReactionPickerMessageId(null)
-          }}
-          onSelectCustom={(name) => {
-            toggleReaction(reactionPickerMessageId, `:${name}:`)
-            setReactionPickerMessageId(null)
-          }}
-          onClose={() => setReactionPickerMessageId(null)}
-          onAddEmoji={
-            (channel?.server_id ?? serverId) && onOpenEmojiSettings
-              ? () => onOpenEmojiSettings(channel?.server_id ?? serverId!)
-              : undefined
-          }
-          anchorRef={reactionPickerButtonRef}
-        />
-      )}
       <form onSubmit={sendMessage} className="px-4 pb-4">
         {replyToMessage && (
           <div className="flex items-center justify-between px-4 py-2 bg-[var(--bg-tertiary)] border-b border-[var(--border)]">

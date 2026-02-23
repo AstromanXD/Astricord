@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+/* =====================================================
+   Discord-ähnliches Design - NUR für Schulungszwecke
+   Kein echtes Discord, keine Markenrechte
+   ===================================================== */
+
+:root {
+  /* Discord Dark Theme - exakte Farbwerte */
+  --bg-primary: #313338;
+  --bg-secondary: #2b2d31;
+  --bg-secondary-alt: #232428;
+  --bg-tertiary: #1e1f22;
+  --bg-sidebar: #1e1f22;
+  --bg-modifier-hover: rgba(79, 84, 92, 0.16);
+  --bg-modifier-active: rgba(79, 84, 92, 0.24);
+  --bg-hover: #383a40;
+  --bg-active: #404249;
+  --text-primary: #f2f3f5;
+  --text-secondary: #b5bac1;
+  --text-muted: #80848e;
+  --text-link: #00a8fc;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+  --accent-success: #3ba55d;
+  --accent-danger: #ed4245;
+  --border: #3f4147;
+  --border-subtle: rgba(0, 0, 0, 0.1);
+}
+
+/* Tailwind Theme Extension */
+@theme {
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-secondary: var(--bg-secondary);
+  --color-bg-tertiary: var(--bg-tertiary);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-active: var(--bg-active);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-border: var(--border);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'gg sans', 'Noto Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.375;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-active);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Discord-Style: Link-Hover */
+a:hover {
+  text-decoration: underline;
+}
+
+/* Scrollbar nur im Chat – Sidebars ohne sichtbare Scrollbar (statisch wirkend) */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Mobile-Responsive */
+@media (max-width: 768px) {
+  .sidebar-left,
+  .sidebar-right {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    transition: transform 0.2s;
+  }
+  .sidebar-left {
+    left: 0;
+  }
+  .sidebar-right {
+    right: 0;
+  }
+}

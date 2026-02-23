@@ -1,0 +1,108 @@
+/**
+ * useMessageReactions - Reaktionen pro Nachricht laden und Realtime-Updates
+ */
+import { useEffect, useState, useCallback } from 'react'
+import { supabase } from '../lib/supabase'
+import type { MessageReaction } from '../lib/supabase'
+import { useBackend, reactions } from '../lib/api'
+import { useAuth } from '../contexts/AuthContext'
+
+export type ReactionGroup = { emoji: string; count: number; userIds: string[] }
+
+export function useMessageReactions(messageIds: string[]) {
+  const { user } = useAuth()
+  const backend = useBackend()
+  const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, ReactionGroup[]>>({})
+
+  const fetchReactions = useCallback(async () => {
+    if (messageIds.length === 0) {
+      setReactionsByMessage({})
+      return
+    }
+    if (backend) {
+      try {
+        const byMessage = await reactions.getByMessages(messageIds)
+        const grouped: Record<string, ReactionGroup[]> = {}
+        for (const [msgId, list] of Object.entries(byMessage)) {
+          grouped[msgId] = []
+          for (const r of list ?? []) {
+            const existing = grouped[msgId].find((g) => g.emoji === r.emoji)
+            if (existing) {
+              if (!existing.userIds.includes(r.user_id)) {
+                existing.userIds.push(r.user_id)
+                existing.count++
+              }
+            } else {
+              grouped[msgId].push({ emoji: r.emoji, count: 1, userIds: [r.user_id] })
+            }
+          }
+        }
+        setReactionsByMessage(grouped)
+      } catch {
+        setReactionsByMessage({})
+      }
+      return
+    }
+    const { data } = await supabase
+      .from('message_reactions')
+      .select('*')
+      .in('message_id', messageIds)
+    const grouped: Record<string, ReactionGroup[]> = {}
+    for (const r of (data ?? []) as MessageReaction[]) {
+      if (!grouped[r.message_id]) grouped[r.message_id] = []
+      const existing = grouped[r.message_id].find((g) => g.emoji === r.emoji)
+      if (existing) {
+        if (!existing.userIds.includes(r.user_id)) {
+          existing.userIds.push(r.user_id)
+          existing.count++
+        }
+      } else {
+        grouped[r.message_id].push({ emoji: r.emoji, count: 1, userIds: [r.user_id] })
+      }
+    }
+    setReactionsByMessage(grouped)
+  }, [messageIds.join(','), backend])
+
+  useEffect(() => {
+    fetchReactions()
+    if (backend) return
+    const channel = supabase
+      .channel('message_reactions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, () => fetchReactions())
+      .subscribe()
+    return () => { channel.unsubscribe() }
+  }, [messageIds.join(','), fetchReactions, backend])
+
+  useEffect(() => {
+    if (!backend || messageIds.length === 0) return
+    const id = setInterval(fetchReactions, 2000)
+    return () => clearInterval(id)
+  }, [backend, messageIds.join(','), fetchReactions])
+
+  const toggleReaction = async (messageId: string, emoji: string) => {
+    if (!user) return
+    if (backend) {
+      try {
+        await reactions.toggle(messageId, emoji)
+        fetchReactions()
+      } catch (_) {}
+      return
+    }
+    const existing = reactionsByMessage[messageId]?.find((g) => g.emoji === emoji)
+    const hasReacted = existing?.userIds.includes(user.id)
+    if (hasReacted) {
+      await supabase
+        .from('message_reactions')
+        .delete()
+        .eq('message_id', messageId)
+        .eq('user_id', user.id)
+        .eq('emoji', emoji)
+    } else {
+      const { error } = await supabase.from('message_reactions').insert({ message_id: messageId, user_id: user.id, emoji })
+      if (error?.code === '23505' || error?.message?.includes('duplicate')) fetchReactions()
+    }
+    fetchReactions()
+  }
+
+  return { reactionsByMessage, toggleReaction }
+}

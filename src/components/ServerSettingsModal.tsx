@@ -12,7 +12,9 @@ import {
   setAllow,
 } from '../lib/permissions'
 import { useServerPermissions } from '../hooks/useServerPermissions'
+import { useUserSettings } from '../contexts/UserSettingsContext'
 import { useBackend, servers, invites, emojis, uploadServerEmoji } from '../lib/api'
+import { formatDateShort, formatDateTime } from '../lib/formatDate'
 
 const ROLE_PERMISSIONS = [
   CHANNEL_PERMISSIONS.VIEW_CHANNEL,
@@ -60,6 +62,7 @@ interface ServerSettingsModalProps {
 export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: ServerSettingsModalProps) {
   const backend = useBackend()
   const { isOwner } = useServerPermissions(server.id)
+  const { settings: userSettings } = useUserSettings()
   const [tab, setTab] = useState<Tab>(initialTab ?? 'serverprofil')
 
   useEffect(() => {
@@ -501,7 +504,7 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   }
 
   const createdDate = server.created_at
-    ? new Date(server.created_at).toLocaleDateString('de-DE', { month: 'short', year: 'numeric' })
+    ? formatDateShort(server.created_at)
     : ''
 
   const NavSection = ({
@@ -1104,7 +1107,7 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                           className="flex items-start gap-3 px-3 py-2 rounded bg-[var(--bg-tertiary)]"
                         >
                           <span className="text-xs text-[var(--text-muted)] flex-shrink-0">
-                            {new Date(entry.created_at).toLocaleString('de-DE')}
+                            {formatDateTime(entry.created_at)}
                           </span>
                           <div className="min-w-0">
                             <span className="text-sm font-medium text-[var(--text-primary)]">{entry.action}</span>
@@ -1115,7 +1118,7 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                             )}
                             {entry.details && Object.keys(entry.details).length > 0 && (
                               <pre className="text-xs text-[var(--text-muted)] mt-1 truncate">
-                                {JSON.stringify(entry.details)}
+                                {userSettings.streamerMode ? '*** (Streamer-Modus)' : JSON.stringify(entry.details)}
                               </pre>
                             )}
                           </div>

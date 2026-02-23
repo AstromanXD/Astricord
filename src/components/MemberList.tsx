@@ -281,64 +281,103 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     )
   }
 
-  const groupedByRole = new Map<string, MemberWithRoles[]>()
-  const noRole: MemberWithRoles[] = []
+  const onlineCount = members.filter((m) => onlineUserIds.has(m.userId)).length
 
-  members.forEach((m) => {
-    const topRole = m.roles.sort((a, b) => b.position - a.position)[0]
-    if (topRole) {
-      const key = topRole.id
-      const list = groupedByRole.get(key) ?? []
-      list.push(m)
-      groupedByRole.set(key, list)
-    } else {
-      noRole.push(m)
-    }
-  })
+  const groupByRole = (list: MemberWithRoles[]) => {
+    const grouped = new Map<string, MemberWithRoles[]>()
+    const noRole: MemberWithRoles[] = []
+    list.forEach((m) => {
+      const topRole = [...m.roles].sort((a, b) => b.position - a.position)[0]
+      if (topRole) {
+        const listForRole = grouped.get(topRole.id) ?? []
+        listForRole.push(m)
+        grouped.set(topRole.id, listForRole)
+      } else {
+        noRole.push(m)
+      }
+    })
+    return { grouped, noRole }
+  }
+
+  const onlineMembers = members.filter((m) => onlineUserIds.has(m.userId))
+  const offlineMembers = members.filter((m) => !onlineUserIds.has(m.userId))
+  const { grouped: onlineByRole, noRole: onlineNoRole } = groupByRole(onlineMembers)
+  const { grouped: offlineByRole, noRole: offlineNoRole } = groupByRole(offlineMembers)
 
   const roleOrder = [...roles].sort((a, b) => b.position - a.position)
+
+  const renderRoleSection = (
+    grouped: Map<string, MemberWithRoles[]>,
+    noRole: MemberWithRoles[],
+    getColor: (role: ServerRole) => string | undefined
+  ) => (
+    <>
+      {roleOrder.map((role) => {
+        const roleMembers = grouped.get(role.id) ?? []
+        if (roleMembers.length === 0) return null
+        return (
+          <div key={role.id} className="mb-2">
+            <div
+              className="px-3 py-1 flex items-center gap-1.5 cursor-default"
+              style={{ color: role.color }}
+            >
+              <span
+                className="w-3 h-3 rounded-full flex-shrink-0"
+                style={{ backgroundColor: role.color }}
+              />
+              <span className="text-xs font-semibold uppercase truncate">{role.name}</span>
+              <span className="text-xs text-[var(--text-muted)]">— {roleMembers.length}</span>
+            </div>
+            {roleMembers.map((m) => (
+              <MemberRow key={m.userId} m={m} color={getColor(role)} />
+            ))}
+          </div>
+        )
+      })}
+      {noRole.length > 0 && (
+        <div className="mb-2">
+          <div className="px-3 py-1 flex items-center gap-1.5 text-[var(--text-muted)]">
+            <span className="w-3 h-3 rounded-full bg-[var(--text-muted)] flex-shrink-0" />
+            <span className="text-xs font-semibold uppercase truncate">Ohne Rolle</span>
+            <span className="text-xs">— {noRole.length}</span>
+          </div>
+          {noRole.map((m) => (
+            <MemberRow key={m.userId} m={m} />
+          ))}
+        </div>
+      )}
+    </>
+  )
 
   return (
     <div className="w-60 flex-shrink-0 flex flex-col overflow-hidden bg-[var(--bg-secondary)] border-l border-[var(--border)]">
       <div className="h-12 px-3 flex items-center border-b border-[var(--border)]">
         <span className="text-sm font-semibold text-[var(--text-primary)]">
           Mitglieder — {members.length}
+          {onlineCount > 0 && (
+            <span className="text-[var(--text-muted)] font-normal"> ({onlineCount} online)</span>
+          )}
         </span>
       </div>
       <div className="flex-1 overflow-y-auto hide-scrollbar py-2">
-        {roleOrder.map((role) => {
-          const roleMembers = groupedByRole.get(role.id) ?? []
-          if (roleMembers.length === 0) return null
-
-          return (
-            <div key={role.id} className="mb-2">
-              <div
-                className="px-3 py-1 flex items-center gap-1.5 cursor-default"
-                style={{ color: role.color }}
-              >
-                <span
-                  className="w-3 h-3 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: role.color }}
-                />
-                <span className="text-xs font-semibold uppercase truncate">{role.name}</span>
-                <span className="text-xs text-[var(--text-muted)]">— {roleMembers.length}</span>
-              </div>
-              {roleMembers.map((m) => (
-                <MemberRow key={m.userId} m={m} color={role.color} />
-              ))}
+        {onlineCount > 0 && (
+          <div className="mb-3">
+            <div className="px-3 py-1 flex items-center gap-1.5 text-[var(--accent-success)]">
+              <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent-success)] flex-shrink-0" />
+              <span className="text-xs font-semibold uppercase truncate">Online</span>
+              <span className="text-xs text-[var(--text-muted)]">— {onlineCount}</span>
             </div>
-          )
-        })}
-        {noRole.length > 0 && (
-          <div className="mb-2">
+            {renderRoleSection(onlineByRole, onlineNoRole, (r) => r.color)}
+          </div>
+        )}
+        {offlineMembers.length > 0 && (
+          <div>
             <div className="px-3 py-1 flex items-center gap-1.5 text-[var(--text-muted)]">
-              <span className="w-3 h-3 rounded-full bg-[var(--text-muted)] flex-shrink-0" />
-              <span className="text-xs font-semibold uppercase truncate">Ohne Rolle</span>
-              <span className="text-xs">— {noRole.length}</span>
+              <span className="w-2.5 h-2.5 rounded-full bg-[var(--text-muted)] flex-shrink-0" />
+              <span className="text-xs font-semibold uppercase truncate">Offline</span>
+              <span className="text-xs">— {offlineMembers.length}</span>
             </div>
-            {noRole.map((m) => (
-              <MemberRow key={m.userId} m={m} />
-            ))}
+            {renderRoleSection(offlineByRole, offlineNoRole, (r) => r.color)}
           </div>
         )}
       </div>

@@ -16,8 +16,10 @@ import { DmChat } from './DmChat'
 import { MemberList } from './MemberList'
 import { VoicePanel } from './VoicePanel'
 import { UserBar } from './UserBar'
+import { DevModeOverlay } from './DevModeOverlay'
 import { TrainingBanner } from './TrainingBanner'
 import { useVoiceChat } from '../hooks/useVoiceChat'
+import { useHotkeys } from '../hooks/useHotkeys'
 import { useAuth } from '../contexts/AuthContext'
 import type { Channel, Profile } from '../lib/supabase'
 
@@ -51,6 +53,11 @@ export function MainLayout() {
   } = useVoiceChat(user?.id, profile?.username ?? 'User', profile?.avatar_url)
 
   const isFriendsView = selectedServerId === FRIENDS_ID
+
+  useHotkeys({
+    onToggleMute: isInVoice ? toggleMute : undefined,
+    onOpenSettings: () => window.dispatchEvent(new CustomEvent('astricord:open-user-settings')),
+  })
 
   const [voiceChannelName, setVoiceChannelName] = useState<string | null>(null)
 
@@ -294,6 +301,8 @@ export function MainLayout() {
           <MemberList serverId={selectedServerId} onOpenDm={handleOpenDm} />
         )}
       </div>
+
+      <DevModeOverlay />
 
       {/* Modal: Server-Einstellungen (aus Kontextmenü) */}
       {serverSettingsServer && (

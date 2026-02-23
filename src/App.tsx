@@ -5,6 +5,7 @@
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { PresenceProvider } from './contexts/PresenceContext'
+import { UserSettingsProvider } from './contexts/UserSettingsContext'
 import { AuthPage } from './components/AuthPage'
 import { MainLayout } from './components/MainLayout'
 import { TrainingBanner } from './components/TrainingBanner'
@@ -52,7 +53,9 @@ export default function App() {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <AppContent />
+        <UserSettingsProvider>
+          <AppContent />
+        </UserSettingsProvider>
       </ThemeProvider>
     </AuthProvider>
   )

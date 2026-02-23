@@ -1,6 +1,8 @@
 /**
  * Kurze Sounds für Voice-Aktionen und Nachrichten (Web Audio API, keine externen Dateien)
  */
+import { getUserSettings } from './userSettings'
+
 let audioContext: AudioContext | null = null
 
 function getContext(): AudioContext | null {
@@ -28,6 +30,7 @@ function playTone(freq: number, durationMs: number, type: OscillatorType = 'sine
 
 /** Sound beim Voice-Beitritt (aufsteigend) */
 export function playSoundVoiceJoin() {
+  if (getUserSettings().joinSound === 'off') return
   const ctx = getContext()
   if (!ctx) return
   playTone(440, 80)
@@ -37,6 +40,7 @@ export function playSoundVoiceJoin() {
 
 /** Sound beim Voice-Verlassen (absteigend) */
 export function playSoundVoiceLeave() {
+  if (getUserSettings().leaveSound === 'off') return
   playTone(659, 80)
   setTimeout(() => playTone(554, 80), 60)
   setTimeout(() => playTone(440, 100), 120)
@@ -54,6 +58,7 @@ export function playSoundUnmute() {
 
 /** Sound bei neuer Nachricht */
 export function playSoundMessage() {
+  if (getUserSettings().messageSound === 'off') return
   playTone(880, 60)
   setTimeout(() => playTone(1109, 80), 80)
 }

@@ -5,6 +5,8 @@ import { useState, memo, useRef, useEffect } from 'react'
 import type { Message as MessageType } from '../lib/supabase'
 import type { Profile, ServerEmoji } from '../lib/supabase'
 import type { ReactionGroup } from '../hooks/useMessageReactions'
+import { useUserSettings } from '../contexts/UserSettingsContext'
+import { formatTime } from '../lib/formatDate'
 import { AudioPlayer } from './AudioPlayer'
 import { LinkEmbed, extractEmbedUrls } from './LinkEmbed'
 import { EmojiPicker } from './EmojiPicker'
@@ -46,21 +48,6 @@ interface MessageProps {
   onOpenEmojiSettings?: () => void
 }
 
-function formatTime(dateStr: string) {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const isToday = d.toDateString() === now.toDateString()
-  if (isToday) {
-    return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
-  }
-  return d.toLocaleDateString('de-DE', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/g
 
@@ -125,6 +112,7 @@ function renderContent(content: string, serverEmojis: ServerEmoji[] = []) {
 }
 
 export const Message = memo(function Message({ message, profile, isOwn, serverEmojis = [], roleColor, parentMessage, onScrollToMessage, isHighlighted, onPin, onUnpin, reactions = [], onToggleReaction, onEdit, onReply, onOpenThread, onDelete, showReactionPicker, reactionPickerButtonRef, onOpenReactionPicker, onReactionSelect, onReactionPickerClose, serverEmojisForPicker = [], serverNameForPicker, onOpenEmojiSettings }: MessageProps) {
+  const { settings } = useUserSettings()
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(message.content)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
@@ -160,6 +148,7 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
 
   return (
     <div
+      data-message-row
       className={`group flex gap-4 px-4 py-1 hover:bg-[var(--bg-hover)]/50 relative transition-colors duration-300 ${
         isOwn ? 'bg-[var(--bg-hover)]/30' : ''
       } ${isHighlighted ? 'bg-[var(--accent)]/20' : ''}`}
@@ -330,10 +319,10 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
               </div>
             ) : content ? (
               <>
-                <p className="text-[var(--text-primary)] break-words whitespace-pre-wrap">
+                <p data-message-content className="text-[var(--text-primary)] break-words whitespace-pre-wrap">
                   {renderContent(content, serverEmojis)}
                 </p>
-                {extractEmbedUrls(content).map((url) => (
+                {settings.showLinkPreview && extractEmbedUrls(content).map((url) => (
                   <LinkEmbed key={url} url={url} />
                 ))}
               </>

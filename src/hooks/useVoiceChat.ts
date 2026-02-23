@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { useBackend, createWebSocket, sendBroadcast, voice } from '../lib/api'
 import { playSoundVoiceJoin, playSoundVoiceLeave, playSoundMute, playSoundUnmute } from '../lib/sounds'
+import { getVoiceSettings } from '../lib/voiceSettings'
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -538,7 +539,11 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     const newVideo = !isVideoOn
     if (newVideo) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+        const vs = getVoiceSettings()
+        const videoConstraints: MediaTrackConstraints = vs.cameraDeviceId && vs.cameraDeviceId !== 'default'
+          ? { deviceId: vs.cameraDeviceId }
+          : true
+        const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints })
         stream.getVideoTracks().forEach((t) => localStreamRef.current?.addTrack(t))
         setLocalVideoStream(stream)
         setIsVideoOn(true)

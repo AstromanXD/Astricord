@@ -11,6 +11,7 @@ import { Message as MessageComponent } from './Message'
 import { ThreadPanel } from './ThreadPanel'
 import { EmojiPicker } from './EmojiPicker'
 import { useAuth } from '../contexts/AuthContext'
+import { useUserSettings } from '../contexts/UserSettingsContext'
 import { playSoundMessage } from '../lib/sounds'
 import { useServerEmojis } from '../hooks/useServerEmojis'
 import { useMemberRoleColors } from '../hooks/useMemberRoleColors'
@@ -25,6 +26,7 @@ interface ChatProps {
 
 export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }: ChatProps) {
   const { user, profile } = useAuth()
+  const { settings: userSettings } = useUserSettings()
   const backend = useBackend()
   const serverEmojis = useServerEmojis(channel?.server_id ?? serverId ?? null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -518,7 +520,9 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
       <div className="flex-1 flex min-w-0 min-h-0">
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto py-4 relative min-w-0 min-h-0"
+        className={`flex-1 overflow-y-auto py-4 relative min-w-0 min-h-0 ${userSettings.compactMode ? 'space-y-0' : ''}`}
+        data-font-size={userSettings.fontSize}
+        data-compact={userSettings.compactMode}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}

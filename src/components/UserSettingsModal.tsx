@@ -1,10 +1,11 @@
 /**
  * UserSettingsModal - Benutzer-Einstellungen (Discord-Style)
- * Profil, Erscheinungsbild, Sprach- & Videochat
+ * Profil, Erscheinungsbild, Sprach- & Videochat, Chat, Hotkeys, etc.
  */
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { useBackend, updateProfile } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import type { Theme } from '../lib/supabase'
 import {
@@ -12,6 +13,8 @@ import {
   setVoiceSettings,
   type VoiceSettings,
 } from '../lib/voiceSettings'
+import { useUserSettings } from '../contexts/UserSettingsContext'
+import type { UserSettings } from '../lib/userSettings'
 
 type Tab =
   | 'profil'
@@ -30,29 +33,40 @@ type VoiceSubTab = 'sprachchat' | 'video' | 'streaming' | 'toene' | 'soundboard'
 
 interface UserSettingsModalProps {
   onClose: () => void
+  initialTab?: Tab
 }
 
-export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
+export function UserSettingsModal({ onClose, initialTab }: UserSettingsModalProps) {
   const { user, profile, refreshProfile, signOut } = useAuth()
   const { theme, setTheme } = useTheme()
-  const [tab, setTab] = useState<Tab>('profil')
+  const backend = useBackend()
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'profil')
   const [voiceSubTab, setVoiceSubTab] = useState<VoiceSubTab>('sprachchat')
   const [voiceSettings, setVoiceSettingsState] = useState<VoiceSettings>(getVoiceSettings)
+  const { settings: userSettings, updateSettings: updateUserSetting } = useUserSettings()
+  const [searchQuery, setSearchQuery] = useState('')
   const [inputDevices, setInputDevices] = useState<MediaDeviceInfo[]>([])
   const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([])
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([])
   const [micTestActive, setMicTestActive] = useState(false)
   const [micLevel, setMicLevel] = useState(0)
   const [profileUsername, setProfileUsername] = useState(profile?.username ?? '')
   const [profileAvatarUrl, setProfileAvatarUrl] = useState(profile?.avatar_url ?? '')
   const [customStatus, setCustomStatus] = useState(profile?.custom_status ?? '')
+  const [profileStatus, setProfileStatus] = useState((profile as { status?: string })?.status ?? 'online')
   const micStreamRef = useRef<MediaStream | null>(null)
   const animationRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (initialTab) setTab(initialTab)
+  }, [initialTab])
 
   useEffect(() => {
     setProfileUsername(profile?.username ?? '')
     setProfileAvatarUrl(profile?.avatar_url ?? '')
     setCustomStatus(profile?.custom_status ?? '')
-  }, [profile?.username, profile?.avatar_url, profile?.custom_status])
+    setProfileStatus((profile as { status?: string })?.status ?? 'online')
+  }, [profile?.username, profile?.avatar_url, profile?.custom_status, (profile as { status?: string })?.status])
 
   useEffect(() => {
     return () => {
@@ -67,6 +81,7 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
         const devices = await navigator.mediaDevices.enumerateDevices()
         setInputDevices(devices.filter((d) => d.kind === 'audioinput'))
         setOutputDevices(devices.filter((d) => d.kind === 'audiooutput'))
+        setVideoDevices(devices.filter((d) => d.kind === 'videoinput'))
       } catch {}
     }
     loadDevices()
@@ -75,6 +90,7 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
   const updateVoiceSetting = (partial: Partial<VoiceSettings>) => {
     setVoiceSettingsState((prev) => setVoiceSettings({ ...prev, ...partial }))
   }
+
 
   const startMicTest = async () => {
     if (micTestActive) return
@@ -123,6 +139,23 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
     { id: 'neon', label: 'Neon' },
   ]
 
+  const tabLabels: Record<Tab, string> = {
+    profil: 'Profil bearbeiten',
+    erscheinungsbild: 'Erscheinungsbild',
+    voice: 'Sprach Videochat',
+    chat: 'Chat',
+    hotkeys: 'Hotkeys',
+    'sprache-zeit': 'Sprache Zeit',
+    windows: 'Windows',
+    streamer: 'Streamer',
+    erweitert: 'Erweitert',
+    'aktivitaet-privatsphaere': 'Privatsphäre Aktivität',
+    'aktivitaet-spiele': 'Spiele',
+    'aktivitaet-overlay': 'Overlay',
+  }
+  const q = searchQuery.trim().toLowerCase()
+  const tabMatches = (t: Tab) => !q || tabLabels[t].toLowerCase().includes(q)
+
   return (
     <div
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
@@ -168,10 +201,13 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               <input
                 type="text"
                 placeholder="Suche"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full px-3 py-2 rounded bg-[var(--bg-secondary)] border border-[var(--border)] text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)]"
               />
             </div>
 
+            {tabMatches('profil') && (
             <button
               onClick={() => setTab('profil')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -183,7 +219,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Profil bearbeiten
             </button>
+            )}
 
+            {tabMatches('erscheinungsbild') && (
             <button
               onClick={() => setTab('erscheinungsbild')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -195,7 +233,10 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Erscheinungsbild
             </button>
+            )}
 
+            {tabMatches('voice') && (
+            <>
             {/* Sprach- & Videochat */}
             <div className="mt-2">
               <button
@@ -232,10 +273,12 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                 </div>
               )}
             </div>
+            </>
+            )}
 
             <div className="my-2 border-t border-[var(--border)]" />
 
-            {/* Chat */}
+            {tabMatches('chat') && (
             <button
               onClick={() => setTab('chat')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -247,7 +290,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Chat
             </button>
+            )}
 
+            {tabMatches('hotkeys') && (
             <button
               onClick={() => setTab('hotkeys')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -259,7 +304,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Hotkeys
             </button>
+            )}
 
+            {tabMatches('sprache-zeit') && (
             <button
               onClick={() => setTab('sprache-zeit')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -271,7 +318,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Sprache & Zeit
             </button>
+            )}
 
+            {tabMatches('windows') && (
             <button
               onClick={() => setTab('windows')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -283,7 +332,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Windows-Einstellungen
             </button>
+            )}
 
+            {tabMatches('streamer') && (
             <button
               onClick={() => setTab('streamer')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -295,7 +346,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Streamer-Modus
             </button>
+            )}
 
+            {tabMatches('erweitert') && (
             <button
               onClick={() => setTab('erweitert')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -307,13 +360,17 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Erweitert
             </button>
+            )}
 
             <div className="my-2 border-t border-[var(--border)]" />
 
             {/* Aktivitätseinstellungen */}
+            {(tabMatches('aktivitaet-privatsphaere') || tabMatches('aktivitaet-spiele') || tabMatches('aktivitaet-overlay')) && (
+            <>
             <p className="px-3 py-1 text-xs font-semibold text-[var(--text-muted)] uppercase">
               Aktivitätseinstellungen
             </p>
+            {tabMatches('aktivitaet-privatsphaere') && (
             <button
               onClick={() => setTab('aktivitaet-privatsphaere')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -325,7 +382,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Privatsphäre deiner Aktivitäten
             </button>
+            )}
 
+            {tabMatches('aktivitaet-spiele') && (
             <button
               onClick={() => setTab('aktivitaet-spiele')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -338,7 +397,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Registrierte Spiele
             </button>
+            )}
 
+            {tabMatches('aktivitaet-overlay') && (
             <button
               onClick={() => setTab('aktivitaet-overlay')}
               className={`w-full text-left px-3 py-2 rounded text-sm flex items-center gap-2 ${
@@ -350,6 +411,9 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               </svg>
               Game-Overlay
             </button>
+            )}
+            </>
+            )}
 
             <div className="my-2 border-t border-[var(--border)]" />
 
@@ -396,6 +460,21 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">
+                    Status
+                  </label>
+                  <select
+                    value={profileStatus}
+                    onChange={(e) => setProfileStatus(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                  >
+                    <option value="online">Online</option>
+                    <option value="away">Abwesend</option>
+                    <option value="dnd">Bitte nicht stören</option>
+                    <option value="offline">Offline</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">
                     Custom Status (Rich Presence)
                   </label>
                   <input
@@ -410,15 +489,18 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                 <button
                   onClick={async () => {
                     if (!user) return
-                    await supabase
-                      .from('profiles')
-                      .update({
-                        username: profileUsername.trim(),
-                        avatar_url: profileAvatarUrl.trim() || null,
-                        custom_status: customStatus.trim() || null,
-                      })
-                      .eq('id', user.id)
-                    refreshProfile()
+                    const data = {
+                      username: profileUsername.trim(),
+                      avatar_url: profileAvatarUrl.trim() || null,
+                      custom_status: customStatus.trim() || null,
+                      status: profileStatus,
+                    }
+                    if (backend) {
+                      await updateProfile(data)
+                    } else {
+                      await supabase.from('profiles').update(data).eq('id', user.id)
+                    }
+                    await refreshProfile()
                   }}
                   className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium"
                 >
@@ -654,11 +736,33 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                     </p>
                     <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
                       <span className="text-sm font-medium text-[var(--text-primary)]">Kamera aktivieren</span>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" className="sr-only peer" defaultChecked={false} />
-                        <div className="w-11 h-6 rounded-full bg-[var(--bg-secondary)] peer-checked:bg-[var(--accent)] transition-colors" />
-                        <span className="absolute left-1 top-1 w-4 h-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5" />
-                      </label>
+                      <button
+                        type="button"
+                        onClick={() => updateVoiceSetting({ cameraEnabled: !voiceSettings.cameraEnabled })}
+                        className={`relative w-12 h-6 rounded-full transition-colors ${
+                          voiceSettings.cameraEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                        }`}
+                      >
+                        <span
+                          className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                          style={{ transform: voiceSettings.cameraEnabled ? 'translateX(24px)' : 'translateX(0)' }}
+                        />
+                      </button>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Kamera</label>
+                      <select
+                        value={voiceSettings.cameraDeviceId}
+                        onChange={(e) => updateVoiceSetting({ cameraDeviceId: e.target.value })}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                      >
+                        <option value="default">System-Standard</option>
+                        {videoDevices.map((d) => (
+                          <option key={d.deviceId} value={d.deviceId}>
+                            {d.label || `Kamera ${d.deviceId.slice(0, 8)}`}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
                 )}
@@ -669,11 +773,15 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                     </p>
                     <div className="p-4 rounded bg-[var(--bg-tertiary)]">
                       <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Stream-Qualität</label>
-                      <select className="w-full px-3 py-2 rounded bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)]">
-                        <option>Automatisch</option>
-                        <option>720p 30fps</option>
-                        <option>1080p 30fps</option>
-                        <option>1080p 60fps</option>
+                      <select
+                        value={voiceSettings.streamQuality}
+                        onChange={(e) => updateVoiceSetting({ streamQuality: e.target.value as VoiceSettings['streamQuality'] })}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)]"
+                      >
+                        <option value="auto">Automatisch</option>
+                        <option value="720p30">720p 30fps</option>
+                        <option value="1080p30">1080p 30fps</option>
+                        <option value="1080p60">1080p 60fps</option>
                       </select>
                     </div>
                   </div>
@@ -683,11 +791,37 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                     <p className="text-sm text-[var(--text-muted)]">
                       Sound-Effekte und Benachrichtigungstöne für Sprachkanäle.
                     </p>
-                    <div className="p-4 rounded bg-[var(--bg-tertiary)]">
-                      <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Beitritts-Sound</label>
-                      <select className="w-full px-3 py-2 rounded bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)]">
-                        <option>Standard</option>
-                        <option>Aus</option>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Beitritts-Sound</label>
+                      <select
+                        value={userSettings.joinSound}
+                        onChange={(e) => updateUserSetting({ joinSound: e.target.value as UserSettings['joinSound'] })}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                      >
+                        <option value="default">Standard</option>
+                        <option value="off">Aus</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Verlassens-Sound</label>
+                      <select
+                        value={userSettings.leaveSound}
+                        onChange={(e) => updateUserSetting({ leaveSound: e.target.value as UserSettings['leaveSound'] })}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                      >
+                        <option value="default">Standard</option>
+                        <option value="off">Aus</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Nachrichten-Sound</label>
+                      <select
+                        value={userSettings.messageSound}
+                        onChange={(e) => updateUserSetting({ messageSound: e.target.value as UserSettings['messageSound'] })}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                      >
+                        <option value="default">Standard</option>
+                        <option value="off">Aus</option>
                       </select>
                     </div>
                   </div>
@@ -713,15 +847,23 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-sm text-[var(--text-primary)]">Echo-Unterdrückung</span>
-                        <select className="px-2 py-1 rounded bg-[var(--bg-secondary)] text-sm text-[var(--text-primary)]">
-                          <option>Automatisch</option>
-                          <option>Aus</option>
+                        <select
+                          value={voiceSettings.echoCancellation}
+                          onChange={(e) => updateVoiceSetting({ echoCancellation: e.target.value as VoiceSettings['echoCancellation'] })}
+                          className="px-2 py-1 rounded bg-[var(--bg-secondary)] text-sm text-[var(--text-primary)]"
+                        >
+                          <option value="auto">Automatisch</option>
+                          <option value="off">Aus</option>
                         </select>
                       </div>
                       <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
                         <span className="text-sm text-[var(--text-primary)]">Audio-Subsystem</span>
-                        <select className="px-2 py-1 rounded bg-[var(--bg-secondary)] text-sm text-[var(--text-primary)]">
-                          <option>Standard</option>
+                        <select
+                          value={voiceSettings.audioSubsystem}
+                          onChange={(e) => updateVoiceSetting({ audioSubsystem: e.target.value as VoiceSettings['audioSubsystem'] })}
+                          className="px-2 py-1 rounded bg-[var(--bg-secondary)] text-sm text-[var(--text-primary)]"
+                        >
+                          <option value="default">Standard</option>
                         </select>
                       </div>
                     </div>
@@ -733,9 +875,56 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
             {tab === 'chat' && (
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-[var(--text-primary)]">Chat</h3>
-                <p className="text-sm text-[var(--text-muted)]">
-                  Chat-Einstellungen wie Schriftgröße, Anzeige von Links und mehr.
-                </p>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">
+                    Schriftgröße
+                  </label>
+                  <select
+                    value={userSettings.fontSize}
+                    onChange={(e) => updateUserSetting({ fontSize: e.target.value as UserSettings['fontSize'] })}
+                    className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                  >
+                    <option value="small">Klein</option>
+                    <option value="medium">Mittel</option>
+                    <option value="large">Groß</option>
+                  </select>
+                </div>
+                <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                  <div>
+                    <p className="font-medium text-[var(--text-primary)]">Link-Vorschau anzeigen</p>
+                    <p className="text-sm text-[var(--text-muted)]">Zeigt Vorschauen bei geteilten Links</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateUserSetting({ showLinkPreview: !userSettings.showLinkPreview })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      userSettings.showLinkPreview ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                    }`}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: userSettings.showLinkPreview ? 'translateX(24px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                  <div>
+                    <p className="font-medium text-[var(--text-primary)]">Kompaktmodus</p>
+                    <p className="text-sm text-[var(--text-muted)]">Weniger Abstand zwischen Nachrichten</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateUserSetting({ compactMode: !userSettings.compactMode })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      userSettings.compactMode ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                    }`}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: userSettings.compactMode ? 'translateX(24px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
               </div>
             )}
 
@@ -743,17 +932,63 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-[var(--text-primary)]">Hotkeys</h3>
                 <p className="text-sm text-[var(--text-muted)]">
-                  Tastenkürzel für schnellen Zugriff auf Funktionen.
+                  Tastenkürzel für schnellen Zugriff. (Anpassung folgt in einer späteren Version.)
                 </p>
+                <div className="rounded-lg bg-[var(--bg-tertiary)] overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[var(--border)]">
+                        <th className="text-left px-4 py-3 font-medium text-[var(--text-primary)]">Aktion</th>
+                        <th className="text-left px-4 py-3 font-medium text-[var(--text-primary)]">Tastenkombination</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-[var(--text-muted)]">
+                      <tr className="border-b border-[var(--border)]"><td className="px-4 py-2">Nachricht senden</td><td className="px-4 py-2 font-mono">Enter</td></tr>
+                      <tr className="border-b border-[var(--border)]"><td className="px-4 py-2">Neue Zeile</td><td className="px-4 py-2 font-mono">Shift + Enter</td></tr>
+                      <tr className="border-b border-[var(--border)]"><td className="px-4 py-2">Mikrofon stummschalten</td><td className="px-4 py-2 font-mono">Ctrl + M</td></tr>
+                      <tr><td className="px-4 py-2">Einstellungen öffnen</td><td className="px-4 py-2 font-mono">Ctrl + ,</td></tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
             {tab === 'sprache-zeit' && (
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-[var(--text-primary)]">Sprache & Zeit</h3>
-                <p className="text-sm text-[var(--text-muted)]">
-                  Sprache der App und Zeitzone einstellen.
-                </p>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">
+                    Sprache
+                  </label>
+                  <select
+                    value={userSettings.language}
+                    onChange={(e) => updateUserSetting({ language: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                  >
+                    <option value="de">Deutsch</option>
+                    <option value="en">English</option>
+                    <option value="fr">Français</option>
+                    <option value="es">Español</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">
+                    Zeitzone
+                  </label>
+                  <select
+                    value={userSettings.timezone}
+                    onChange={(e) => updateUserSetting({ timezone: e.target.value })}
+                    className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                  >
+                    <option value="Europe/Berlin">Europe/Berlin</option>
+                    <option value="Europe/Vienna">Europe/Vienna</option>
+                    <option value="Europe/Zurich">Europe/Zurich</option>
+                    <option value="America/New_York">America/New_York</option>
+                    <option value="America/Los_Angeles">America/Los_Angeles</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo</option>
+                    <option value="UTC">UTC</option>
+                  </select>
+                </div>
               </div>
             )}
 
@@ -761,8 +996,44 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-[var(--text-primary)]">Windows-Einstellungen</h3>
                 <p className="text-sm text-[var(--text-muted)]">
-                  Start beim Systemstart, Minimieren in die Taskleiste und mehr.
+                  Optionen für die Desktop-App (Electron).
                 </p>
+                <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                  <div>
+                    <p className="font-medium text-[var(--text-primary)]">Beim Start minimieren</p>
+                    <p className="text-sm text-[var(--text-muted)]">App startet minimiert in der Taskleiste</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateUserSetting({ startMinimized: !userSettings.startMinimized })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      userSettings.startMinimized ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                    }`}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: userSettings.startMinimized ? 'translateX(24px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
+                <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                  <div>
+                    <p className="font-medium text-[var(--text-primary)]">In Taskleiste minimieren</p>
+                    <p className="text-sm text-[var(--text-muted)]">Beim Schließen in System-Tray minimieren</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateUserSetting({ minimizeToTray: !userSettings.minimizeToTray })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      userSettings.minimizeToTray ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                    }`}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: userSettings.minimizeToTray ? 'translateX(24px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
               </div>
             )}
 
@@ -770,8 +1041,26 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-[var(--text-primary)]">Streamer-Modus</h3>
                 <p className="text-sm text-[var(--text-muted)]">
-                  Blendet sensible Informationen aus, wenn du streamst.
+                  Blendet sensible Informationen aus, wenn du streamst (z.B. E-Mail, Nutzer-IDs).
                 </p>
+                <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                  <div>
+                    <p className="font-medium text-[var(--text-primary)]">Streamer-Modus aktivieren</p>
+                    <p className="text-sm text-[var(--text-muted)]">Sensible Daten werden ausgeblendet</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateUserSetting({ streamerMode: !userSettings.streamerMode })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      userSettings.streamerMode ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                    }`}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: userSettings.streamerMode ? 'translateX(24px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
               </div>
             )}
 
@@ -781,6 +1070,24 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                 <p className="text-sm text-[var(--text-muted)]">
                   Erweiterte Optionen für Entwickler und Power-User.
                 </p>
+                <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                  <div>
+                    <p className="font-medium text-[var(--text-primary)]">Entwicklermodus</p>
+                    <p className="text-sm text-[var(--text-muted)]">Zusätzliche Debug-Informationen anzeigen</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateUserSetting({ devMode: !userSettings.devMode })}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      userSettings.devMode ? 'bg-[var(--accent)]' : 'bg-[var(--bg-secondary)]'
+                    }`}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform"
+                      style={{ transform: userSettings.devMode ? 'translateX(24px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
               </div>
             )}
 
@@ -792,6 +1099,20 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                 <p className="text-sm text-[var(--text-muted)]">
                   Steuere, wer deine Aktivität und deinen Status sehen kann.
                 </p>
+                <div>
+                  <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">
+                    Sichtbarkeit deiner Aktivität
+                  </label>
+                  <select
+                    value={userSettings.activityVisibility}
+                    onChange={(e) => updateUserSetting({ activityVisibility: e.target.value as UserSettings['activityVisibility'] })}
+                    className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                  >
+                    <option value="all">Alle</option>
+                    <option value="friends">Nur Freunde</option>
+                    <option value="none">Niemand</option>
+                  </select>
+                </div>
               </div>
             )}
 
@@ -801,8 +1122,19 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
                   Registrierte Spiele
                 </h3>
                 <p className="text-sm text-[var(--text-muted)]">
-                  Spiele hinzufügen, die in deinem Status angezeigt werden.
+                  Spiele hinzufügen, die in deinem Status angezeigt werden. (Spiel-Erkennung folgt in einer späteren Version.)
                 </p>
+                <div className="p-6 rounded-lg bg-[var(--bg-tertiary)] text-center text-[var(--text-muted)]">
+                  <p className="text-sm">Noch keine Spiele registriert.</p>
+                  <button
+                    type="button"
+                    onClick={() => {}}
+                    className="mt-4 px-4 py-2 rounded bg-[var(--accent)] text-white text-sm font-medium opacity-60 cursor-not-allowed"
+                    disabled
+                  >
+                    Spiel hinzufügen (bald verfügbar)
+                  </button>
+                </div>
               </div>
             )}
 
@@ -810,8 +1142,11 @@ export function UserSettingsModal({ onClose }: UserSettingsModalProps) {
               <div className="space-y-6">
                 <h3 className="text-xl font-semibold text-[var(--text-primary)]">Game-Overlay</h3>
                 <p className="text-sm text-[var(--text-muted)]">
-                  Overlay-Einstellungen für Spiele.
+                  Overlay-Einstellungen für Spiele. Zeigt einen kleinen Overlay in Vollbild-Spielen.
                 </p>
+                <div className="p-6 rounded-lg bg-[var(--bg-tertiary)] text-center text-[var(--text-muted)]">
+                  <p className="text-sm">Game-Overlay wird in einer späteren Version unterstützt.</p>
+                </div>
               </div>
             )}
           </div>

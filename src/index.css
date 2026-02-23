@@ -93,6 +93,18 @@ a:hover {
   display: none;
 }
 
+/* Chat-Einstellungen: Schriftgröße & Kompaktmodus */
+[data-font-size="small"] [data-message-content] {
+  font-size: 14px;
+}
+[data-font-size="large"] [data-message-content] {
+  font-size: 18px;
+}
+[data-compact="true"] [data-message-row] {
+  padding-top: 0.125rem;
+  padding-bottom: 0.125rem;
+}
+
 /* Mobile-Responsive */
 @media (max-width: 768px) {
   .sidebar-left,

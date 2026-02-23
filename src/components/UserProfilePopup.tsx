@@ -4,7 +4,9 @@
  */
 import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { UserSettingsModal } from './UserSettingsModal'
+import { useUserSettings } from '../contexts/UserSettingsContext'
+import { useBackend, updateProfile } from '../lib/api'
+import { supabase } from '../lib/supabase'
 
 interface VoiceUser {
   userId: string
@@ -12,6 +14,8 @@ interface VoiceUser {
   avatarUrl: string | null
   isMuted: boolean
 }
+
+type StatusType = 'online' | 'offline' | 'away' | 'dnd'
 
 interface UserProfilePopupProps {
   onClose: () => void
@@ -21,6 +25,8 @@ interface UserProfilePopupProps {
   voiceChannelName?: string | null
   voiceServerName?: string | null
   voiceUsers?: VoiceUser[]
+  onShowComingSoon?: (msg: string) => void
+  onOpenSettings?: () => void
 }
 
 const PROMO_DISMISSED_KEY = 'astricord-profile-promo-dismissed'
@@ -33,9 +39,14 @@ export function UserProfilePopup({
   voiceChannelName = null,
   voiceServerName = null,
   voiceUsers = [],
+  onShowComingSoon,
+  onOpenSettings,
 }: UserProfilePopupProps) {
-  const { user, profile, signOut } = useAuth()
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const { user, profile, signOut, refreshProfile } = useAuth()
+  const { settings: userSettings } = useUserSettings()
+  const backend = useBackend()
+  const [statusDropdownOpen, setStatusDropdownOpen] = useState(false)
+  const [sprachstatusMenuOpen, setSprachstatusMenuOpen] = useState(false)
   const [promoDismissed, setPromoDismissed] = useState(() => {
     try {
       return localStorage.getItem(PROMO_DISMISSED_KEY) === '1'
@@ -75,6 +86,30 @@ export function UserProfilePopup({
     }
   }
 
+  const currentStatus = (profile as { status?: string | null }).status || 'online'
+
+  const setStatus = async (status: StatusType) => {
+    if (!user) return
+    try {
+      if (backend) {
+        await updateProfile({ status })
+      } else {
+        await supabase.from('profiles').update({ status }).eq('id', user.id)
+      }
+      await refreshProfile()
+      setStatusDropdownOpen(false)
+    } catch (err) {
+      console.error('Status update failed:', err)
+    }
+  }
+
+  const statusOptions: { id: StatusType; label: string; color: string }[] = [
+    { id: 'online', label: 'Online', color: 'bg-[var(--accent-success)]' },
+    { id: 'away', label: 'Abwesend', color: 'bg-yellow-500' },
+    { id: 'dnd', label: 'Bitte nicht stören', color: 'bg-red-500' },
+    { id: 'offline', label: 'Offline', color: 'bg-[var(--text-muted)]' },
+  ]
+
   if (!user || !profile) return null
 
   const customStatus = (profile as { custom_status?: string | null }).custom_status
@@ -100,8 +135,13 @@ export function UserProfilePopup({
                 )}
               </div>
               <span
-                className="absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-[var(--bg-secondary)] bg-[var(--accent-success)]"
-                title="Online"
+                className={`absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-[var(--bg-secondary)] ${
+                  currentStatus === 'away' ? 'bg-yellow-500' :
+                  currentStatus === 'dnd' ? 'bg-red-500' :
+                  currentStatus === 'offline' ? 'bg-[var(--text-muted)]' :
+                  'bg-[var(--accent-success)]'
+                }`}
+                title={statusOptions.find((o) => o.id === currentStatus)?.label ?? 'Online'}
               />
             </div>
             <div className="flex-1 min-w-0 pt-1">
@@ -138,7 +178,7 @@ export function UserProfilePopup({
             <p className="text-sm font-medium text-[var(--text-primary)] pr-6">Peppe dein Profil auf</p>
             <div className="flex gap-2 mt-2">
               <button
-                onClick={() => { onClose(); setSettingsOpen(true) }}
+                onClick={() => onOpenSettings?.()}
                 className="flex-1 px-2 py-1.5 rounded text-xs font-medium bg-[var(--bg-tertiary)] hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] flex items-center justify-center gap-1"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -147,7 +187,10 @@ export function UserProfilePopup({
                 </svg>
                 Vorteile anzeigen
               </button>
-              <button className="flex-1 px-2 py-1.5 rounded text-xs font-medium bg-[var(--bg-tertiary)] hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] flex items-center justify-center gap-1">
+              <button
+                onClick={() => onShowComingSoon?.('Shop – bald verfügbar')}
+                className="flex-1 px-2 py-1.5 rounded text-xs font-medium bg-[var(--bg-tertiary)] hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] flex items-center justify-center gap-1"
+              >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                 </svg>
@@ -161,17 +204,39 @@ export function UserProfilePopup({
         <div className="mx-3 mt-3 px-3 py-2.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)]">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-medium text-[var(--text-primary)]">Sprachstatus</span>
-            <div className="flex items-center gap-1">
-              <button className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]" title="Info">
+            <div className="flex items-center gap-1 relative">
+              <button
+                className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                title="Dein benutzerdefinierter Status wird anderen Nutzern angezeigt. Bearbeite ihn in den Einstellungen."
+              >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </button>
-              <button className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]" title="Mehr">
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
-                </svg>
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setSprachstatusMenuOpen((o) => !o)}
+                  className="p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                  title="Mehr Optionen"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+                  </svg>
+                </button>
+                {sprachstatusMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setSprachstatusMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-1 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] shadow-xl z-50 min-w-[160px]">
+                      <button
+                        onClick={() => { setSprachstatusMenuOpen(false); onOpenSettings?.() }}
+                        className="w-full text-left px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)]"
+                      >
+                        Custom Status bearbeiten
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
           <p className="text-sm text-[var(--text-muted)] flex items-center gap-1.5">
@@ -232,7 +297,7 @@ export function UserProfilePopup({
         {/* Profil-Aktionen */}
         <div className="p-2 space-y-0.5">
           <button
-            onClick={() => { onClose(); setSettingsOpen(true) }}
+            onClick={() => onOpenSettings?.()}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] text-left transition-colors"
           >
             <svg className="w-5 h-5 text-[var(--text-muted)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -244,16 +309,45 @@ export function UserProfilePopup({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </button>
+          <div className="relative">
+            <button
+              onClick={() => setStatusDropdownOpen((o) => !o)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] text-left transition-colors"
+            >
+              <span
+                className={`w-3 h-3 rounded-full flex-shrink-0 ${
+                  currentStatus === 'online' ? 'bg-[var(--accent-success)]' :
+                  currentStatus === 'away' ? 'bg-yellow-500' :
+                  currentStatus === 'dnd' ? 'bg-red-500' : 'bg-[var(--text-muted)]'
+                }`}
+              />
+              <span className="flex-1 text-sm font-medium">
+                {statusOptions.find((o) => o.id === currentStatus)?.label ?? 'Online'}
+              </span>
+              <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            {statusDropdownOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setStatusDropdownOpen(false)} />
+                <div className="absolute left-0 bottom-full mb-1 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] shadow-xl z-50 min-w-[180px]">
+                  {statusOptions.map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setStatus(opt.id)}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)] text-left"
+                    >
+                      <span className={`w-3 h-3 rounded-full flex-shrink-0 ${opt.color}`} />
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <button
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] text-left transition-colors"
-          >
-            <span className="w-3 h-3 rounded-full bg-[var(--accent-success)] flex-shrink-0" />
-            <span className="flex-1 text-sm font-medium">Online</span>
-            <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-          <button
+            onClick={() => { onClose(); signOut() }}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] text-left transition-colors"
           >
             <svg className="w-5 h-5 text-[var(--text-muted)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -264,6 +358,7 @@ export function UserProfilePopup({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
             </svg>
           </button>
+          {!userSettings.streamerMode && (
           <button
             onClick={copyUserId}
             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[var(--bg-modifier-hover)] text-[var(--text-primary)] text-left transition-colors"
@@ -273,6 +368,7 @@ export function UserProfilePopup({
             </svg>
             <span className="flex-1 text-sm font-medium">Nutzer-ID kopieren</span>
           </button>
+          )}
           <div className="border-t border-[var(--border)] my-1" />
           <button
             onClick={() => { onClose(); signOut() }}
@@ -285,10 +381,6 @@ export function UserProfilePopup({
           </button>
         </div>
       </div>
-
-      {settingsOpen && (
-        <UserSettingsModal onClose={() => setSettingsOpen(false)} />
-      )}
     </>
   )
 }

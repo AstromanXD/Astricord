@@ -11,6 +11,14 @@ export interface VoiceSettings {
   autoSensitivity: boolean
   noiseSuppression: 'none' | 'krisp' | 'standard'
   recordingProfile: 'voice-isolation' | 'studio' | 'custom'
+  // Video
+  cameraEnabled: boolean
+  cameraDeviceId: string
+  // Streaming
+  streamQuality: 'auto' | '720p30' | '1080p30' | '1080p60'
+  // Erweitert
+  echoCancellation: 'auto' | 'off'
+  audioSubsystem: 'default'
 }
 
 const defaults: VoiceSettings = {
@@ -21,6 +29,11 @@ const defaults: VoiceSettings = {
   autoSensitivity: true,
   noiseSuppression: 'standard',
   recordingProfile: 'custom',
+  cameraEnabled: false,
+  cameraDeviceId: 'default',
+  streamQuality: 'auto',
+  echoCancellation: 'auto',
+  audioSubsystem: 'default',
 }
 
 export function getVoiceSettings(): VoiceSettings {

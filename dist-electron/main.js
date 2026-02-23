@@ -15359,8 +15359,28 @@ function setupAutoUpdater() {
   mainExports.autoUpdater.checkForUpdatesAndNotify();
 }
 let mainWindow = null;
+let tray = null;
 const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+function getElectronSettings() {
+  try {
+    const path = require$$1$1.join(require$$1$3.app.getPath("userData"), "astricord-electron-settings.json");
+    if (require$$1.existsSync(path)) {
+      const data = JSON.parse(require$$1.readFileSync(path, "utf-8"));
+      return { startMinimized: !!data.startMinimized, minimizeToTray: data.minimizeToTray !== false };
+    }
+  } catch {
+  }
+  return { startMinimized: false, minimizeToTray: true };
+}
+function saveElectronSettings(s) {
+  try {
+    const path = require$$1$1.join(require$$1$3.app.getPath("userData"), "astricord-electron-settings.json");
+    require$$1.writeFileSync(path, JSON.stringify(s), "utf-8");
+  } catch {
+  }
+}
 function createWindow() {
+  const electronSettings = getElectronSettings();
   mainWindow = new require$$1$3.BrowserWindow({
     width: 1200,
     height: 800,
@@ -15380,11 +15400,41 @@ function createWindow() {
   } else {
     mainWindow.loadFile(require$$1$1.join(__dirname, "../dist/index.html"));
   }
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.once("ready-to-show", () => {
+    if (!electronSettings.startMinimized) {
+      mainWindow?.show();
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
+    if (tray) {
+      tray.destroy();
+      tray = null;
+    }
+  });
+  mainWindow.on("close", (e) => {
+    const s = getElectronSettings();
+    if (s.minimizeToTray && mainWindow && !mainWindow.isDestroyed()) {
+      e.preventDefault();
+      mainWindow.hide();
+      if (!tray) {
+        const iconPath = require$$1$1.join(__dirname, "../dist/favicon.ico");
+        const icon = require$$1.existsSync(iconPath) ? require$$1$3.nativeImage.createFromPath(iconPath) : require$$1$3.nativeImage.createEmpty();
+        tray = new require$$1$3.Tray(icon);
+        tray.setToolTip("Astricord");
+        tray.on("click", () => {
+          mainWindow?.show();
+          mainWindow?.focus();
+        });
+      }
+    }
   });
 }
+require$$1$3.ipcMain.handle("user-settings-sync", (_event, settings) => {
+  const current = getElectronSettings();
+  const next = { ...current, ...settings };
+  saveElectronSettings(next);
+});
 require$$1$3.app.whenReady().then(() => {
   require$$1$3.session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
     const sources = await require$$1$3.desktopCapturer.getSources({ types: ["screen", "window"] });
@@ -15397,6 +15447,7 @@ require$$1$3.app.whenReady().then(() => {
   }
   require$$1$3.app.on("activate", () => {
     if (require$$1$3.BrowserWindow.getAllWindows().length === 0) createWindow();
+    else mainWindow?.show();
   });
 });
 require$$1$3.app.on("window-all-closed", () => {

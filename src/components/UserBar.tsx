@@ -75,14 +75,14 @@ export function UserBar({
   const { user, profile } = useAuth()
   const [menuOpen, setMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [_comingSoonMsg, setComingSoonMsg] = useState<string | null>(null)
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'voice' | undefined>(undefined)
+  const [comingSoonMsg, setComingSoonMsg] = useState<string | null>(null)
   const userAreaRef = useRef<HTMLDivElement>(null)
 
   const showComingSoon = (msg: string) => {
     setComingSoonMsg(msg)
     setTimeout(() => setComingSoonMsg(null), 2000)
   }
-
 
   useEffect(() => {
     const handler = () => setSettingsOpen(true)
@@ -125,7 +125,7 @@ export function UserBar({
   )
 
   return (
-    <div className="flex flex-col bg-[var(--bg-tertiary)] border-t border-[var(--border)]">
+    <div className="relative flex flex-col bg-[var(--bg-tertiary)] border-t border-[var(--border)]">
       {/* Voice-Status (nur wenn in Voice) - Discord-Style */}
       {isInVoice && (
         <div className="px-2 py-2 border-b border-[var(--border)]">
@@ -151,13 +151,13 @@ export function UserBar({
                   )}
                 </IconBtn>
               )}
-              <IconBtn onClick={() => showComingSoon('Lautsprecher – bald verfügbar')} title="Lautsprecher">
+              <IconBtn onClick={() => { setMenuOpen(false); setSettingsInitialTab('voice'); setSettingsOpen(true) }} title="Lautsprecher & Voice-Einstellungen">
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
                 </svg>
               </IconBtn>
               <button
-                onClick={() => { setMenuOpen(false); setSettingsOpen(true) }}
+                onClick={() => { setMenuOpen(false); setSettingsInitialTab(undefined); setSettingsOpen(true) }}
                 className="p-1.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)]"
                 title="Einstellungen"
               >
@@ -202,8 +202,13 @@ export function UserBar({
             </div>
           )}
           <span
-            className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[var(--bg-tertiary)] bg-[var(--accent-success)]"
-            title="Online"
+            className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[var(--bg-tertiary)] ${
+              (profile as { status?: string }).status === 'away' ? 'bg-yellow-500' :
+              (profile as { status?: string }).status === 'dnd' ? 'bg-red-500' :
+              (profile as { status?: string }).status === 'offline' ? 'bg-[var(--text-muted)]' :
+              'bg-[var(--accent-success)]'
+            }`}
+            title={(profile as { status?: string }).status || 'Online'}
           />
         </button>
         <div className="flex-1 min-w-0 flex flex-col justify-center">
@@ -227,13 +232,13 @@ export function UserBar({
               )}
             </IconBtn>
           )}
-          <IconBtn onClick={() => showComingSoon('Lautsprecher – bald verfügbar')} title="Lautsprecher">
+          <IconBtn onClick={() => { setMenuOpen(false); setSettingsInitialTab('voice'); setSettingsOpen(true) }} title="Lautsprecher & Voice-Einstellungen">
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
             </svg>
           </IconBtn>
           <button
-            onClick={() => { setMenuOpen(false); setSettingsOpen(true) }}
+            onClick={() => { setMenuOpen(false); setSettingsInitialTab(undefined); setSettingsOpen(true) }}
             className="p-1.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)]"
             title="Einstellungen"
           >
@@ -253,12 +258,22 @@ export function UserBar({
           voiceChannelName={voiceChannelName}
           voiceServerName={voiceServerName}
           voiceUsers={_voiceUsers}
+          onShowComingSoon={showComingSoon}
+          onOpenSettings={() => { setMenuOpen(false); setSettingsInitialTab(undefined); setSettingsOpen(true) }}
         />
         )}
       </div>
 
+      {comingSoonMsg && (
+        <div className="absolute bottom-full left-2 mb-1 px-3 py-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] shadow-lg text-sm text-[var(--text-primary)] z-[60]">
+          {comingSoonMsg}
+        </div>
+      )}
       {settingsOpen && (
-        <UserSettingsModal onClose={() => setSettingsOpen(false)} />
+        <UserSettingsModal
+          onClose={() => { setSettingsOpen(false); setSettingsInitialTab(undefined) }}
+          initialTab={settingsInitialTab}
+        />
       )}
     </div>
   )

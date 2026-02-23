@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, useState, useRef, type ReactNode 
 import { supabase } from '../lib/supabase'
 import { useAuth } from './AuthContext'
 import { createWebSocket, useBackend } from '../lib/api'
+import { useUserSettings } from './UserSettingsContext'
 
 const PRESENCE_CHANNEL = 'presence:global'
 
@@ -18,6 +19,7 @@ const PresenceContext = createContext<PresenceContextType | undefined>(undefined
 export function PresenceProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const backend = useBackend()
+  const { settings } = useUserSettings()
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set())
   const onlineRef = useRef<Set<string>>(new Set())
 
@@ -70,20 +72,28 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
       setOnlineUserIds(ids)
     }
 
-    channel
-      .on('presence', { event: 'sync' }, updateOnlineUsers)
-      .on('presence', { event: 'join' }, updateOnlineUsers)
-      .on('presence', { event: 'leave' }, updateOnlineUsers)
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await channel.track({ user_id: user.id })
-        }
-      })
+    if (settings.activityVisibility === 'none') {
+      channel
+        .on('presence', { event: 'sync' }, updateOnlineUsers)
+        .on('presence', { event: 'join' }, updateOnlineUsers)
+        .on('presence', { event: 'leave' }, updateOnlineUsers)
+        .subscribe()
+    } else {
+      channel
+        .on('presence', { event: 'sync' }, updateOnlineUsers)
+        .on('presence', { event: 'join' }, updateOnlineUsers)
+        .on('presence', { event: 'leave' }, updateOnlineUsers)
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await channel.track({ user_id: user.id })
+          }
+        })
+    }
 
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [user?.id, backend])
+  }, [user?.id, backend, settings.activityVisibility])
 
   return (
     <PresenceContext.Provider value={{ onlineUserIds }}>

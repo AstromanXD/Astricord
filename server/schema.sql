@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS servers (
   icon_url TEXT,
   description TEXT,
   banner_color VARCHAR(20) DEFAULT '#4f545c',
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  owner_id CHAR(36),
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- Channel Categories

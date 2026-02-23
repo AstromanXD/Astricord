@@ -2,19 +2,14 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { pool } from '../config/db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { PERMISSIONS, hasPermission, getEffectivePermissions } from '../lib/permissions.js'
 
 const router = Router()
 router.use(authMiddleware)
 
-async function isAdmin(serverId, userId) {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM server_members sm
-     JOIN server_member_roles smr ON sm.server_id = smr.server_id AND sm.user_id = smr.user_id
-     JOIN server_roles sr ON smr.role_id = sr.id
-     WHERE sm.server_id = ? AND sm.user_id = ? AND sr.name = 'Admin'`,
-    [serverId, userId]
-  )
-  return rows.length > 0
+async function checkPerm(serverId, userId, flag) {
+  const perms = await getEffectivePermissions(pool, serverId, userId)
+  return hasPermission(perms, flag)
 }
 
 router.get('/', async (req, res) => {
@@ -48,16 +43,20 @@ router.post('/', async (req, res) => {
 
     await pool.query('START TRANSACTION')
     await pool.execute(
-      'INSERT INTO servers (id, name, icon_url, description, banner_color) VALUES (?, ?, ?, ?, ?)',
-      [serverId, name || 'Neuer Server', icon_url || null, description || null, banner_color || '#4f545c']
+      'INSERT INTO servers (id, name, icon_url, description, banner_color, owner_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [serverId, name || 'Neuer Server', icon_url || null, description || null, banner_color || '#4f545c', req.user.id]
+    )
+    const defaultMemberPerms =
+      PERMISSIONS.VIEW_CHANNEL | PERMISSIONS.SEND_MESSAGES | PERMISSIONS.READ_MESSAGE_HISTORY |
+      PERMISSIONS.ADD_REACTIONS | PERMISSIONS.CONNECT | PERMISSIONS.SPEAK |
+      PERMISSIONS.ATTACH_FILES | PERMISSIONS.EMBED_LINKS
+    await pool.execute(
+      'INSERT INTO server_roles (id, server_id, name, color, position, permissions) VALUES (?, ?, ?, ?, ?, ?)',
+      [adminRoleId, serverId, 'Admin', '#5865f2', 100, PERMISSIONS.ADMINISTRATOR]
     )
     await pool.execute(
-      'INSERT INTO server_roles (id, server_id, name, color, position) VALUES (?, ?, ?, ?, ?)',
-      [adminRoleId, serverId, 'Admin', '#5865f2', 100]
-    )
-    await pool.execute(
-      'INSERT INTO server_roles (id, server_id, name, color, position) VALUES (?, ?, ?, ?, ?)',
-      [memberRoleId, serverId, 'Member', '#57f287', 0]
+      'INSERT INTO server_roles (id, server_id, name, color, position, permissions) VALUES (?, ?, ?, ?, ?, ?)',
+      [memberRoleId, serverId, 'Member', '#57f287', 0, defaultMemberPerms]
     )
     await pool.execute(
       'INSERT INTO server_members (server_id, user_id) VALUES (?, ?)',
@@ -65,7 +64,7 @@ router.post('/', async (req, res) => {
     )
     await pool.execute(
       'INSERT INTO server_member_roles (server_id, user_id, role_id) VALUES (?, ?, ?)',
-      [serverId, req.user.id, adminRoleId]
+      [serverId, req.user.id, memberRoleId]
     )
     await pool.execute(
       'INSERT INTO channels (id, server_id, name, type, position) VALUES (?, ?, ?, ?, ?)',
@@ -210,8 +209,8 @@ router.get('/:id/members-detail', async (req, res) => {
 
 router.delete('/:id/members/:userId', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.KICK_MEMBERS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
     if (req.params.userId === req.user.id) return res.status(400).json({ error: 'Kann sich nicht selbst kicken' })
 
     const [[prof]] = await pool.execute('SELECT username FROM profiles WHERE id = ?', [req.params.userId])
@@ -236,8 +235,8 @@ router.delete('/:id/members/:userId', async (req, res) => {
 
 router.post('/:id/members/:userId/ban', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.BAN_MEMBERS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
     if (req.params.userId === req.user.id) return res.status(400).json({ error: 'Kann sich nicht selbst bannen' })
 
     const [[prof]] = await pool.execute('SELECT username FROM profiles WHERE id = ?', [req.params.userId])
@@ -266,8 +265,8 @@ router.post('/:id/members/:userId/ban', async (req, res) => {
 
 router.patch('/:id/members/:userId/roles', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_ROLES)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const { role_id, add } = req.body
     if (!role_id || typeof add !== 'boolean') return res.status(400).json({ error: 'role_id und add erforderlich' })
@@ -321,8 +320,8 @@ router.get('/:id/roles', async (req, res) => {
 
 router.post('/:id/roles', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_ROLES)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const { name, color, position } = req.body
     if (!name?.trim()) return res.status(400).json({ error: 'name erforderlich' })
@@ -331,11 +330,15 @@ router.post('/:id/roles', async (req, res) => {
       'SELECT COALESCE(MAX(position), 0) as m FROM server_roles WHERE server_id = ?',
       [req.params.id]
     )
+    const defaultRolePerms =
+      PERMISSIONS.VIEW_CHANNEL | PERMISSIONS.SEND_MESSAGES | PERMISSIONS.READ_MESSAGE_HISTORY |
+      PERMISSIONS.ADD_REACTIONS | PERMISSIONS.CONNECT | PERMISSIONS.SPEAK |
+      PERMISSIONS.ATTACH_FILES | PERMISSIONS.EMBED_LINKS
     const pos = position ?? (maxPos[0]?.m ?? 0) + 1
     const roleId = uuidv4()
     await pool.execute(
       'INSERT INTO server_roles (id, server_id, name, color, position, permissions) VALUES (?, ?, ?, ?, ?, ?)',
-      [roleId, req.params.id, name.trim(), color || '#99aab5', pos, 3147264]
+      [roleId, req.params.id, name.trim(), color || '#99aab5', pos, defaultRolePerms]
     )
     const [rows] = await pool.execute(
       'SELECT id, server_id, name, color, position, permissions, created_at FROM server_roles WHERE id = ?',
@@ -352,8 +355,8 @@ router.post('/:id/roles', async (req, res) => {
 
 router.patch('/:id/roles/:roleId', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_ROLES)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const [role] = await pool.execute(
       'SELECT id FROM server_roles WHERE server_id = ? AND id = ?',
@@ -387,8 +390,8 @@ router.patch('/:id/roles/:roleId', async (req, res) => {
 
 router.delete('/:id/roles/:roleId', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_ROLES)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const [role] = await pool.execute(
       'SELECT name FROM server_roles WHERE server_id = ? AND id = ?',
@@ -409,10 +412,13 @@ router.delete('/:id/roles/:roleId', async (req, res) => {
 
 router.get('/:id/permissions', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    res.json({ isAdmin: !!admin })
+    const [srv] = await pool.execute('SELECT owner_id FROM servers WHERE id = ?', [req.params.id])
+    const isOwner = srv.length && srv[0].owner_id === req.user.id
+    const perms = await getEffectivePermissions(pool, req.params.id, req.user.id)
+    const isAdmin = hasPermission(perms, PERMISSIONS.ADMINISTRATOR)
+    res.json({ isAdmin: !!isAdmin, isOwner: !!isOwner, permissions: perms })
   } catch (err) {
-    res.json({ isAdmin: false })
+    res.json({ isAdmin: false, isOwner: false, permissions: 0 })
   }
 })
 
@@ -441,8 +447,8 @@ router.get('/:id', async (req, res) => {
 
 router.patch('/:id', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_SERVER)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const { name, icon_url, description, banner_color } = req.body
     const updates = []
@@ -474,11 +480,8 @@ router.patch('/:id', async (req, res) => {
 
 router.get('/:id/audit-log', async (req, res) => {
   try {
-    const [member] = await pool.execute(
-      'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
-      [req.params.id, req.user.id]
-    )
-    if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.VIEW_AUDIT_LOG)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const [rows] = await pool.execute(
       `SELECT id, server_id, user_id, action, target_type, target_id, details, created_at
@@ -499,8 +502,8 @@ router.get('/:id/audit-log', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const admin = await isAdmin(req.params.id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_SERVER)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     await pool.execute('DELETE FROM servers WHERE id = ?', [req.params.id])
     res.status(204).send()

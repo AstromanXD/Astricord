@@ -6,28 +6,25 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Server, ServerRole, ServerEmoji, Profile, ServerInvite, AuditLogEntry } from '../lib/supabase'
 import {
-  CHANNEL_PERMISSIONS,
-  PERMISSION_LABELS,
   hasPermission,
   setAllow,
+  PERMISSION_GROUPS,
 } from '../lib/permissions'
 import { useServerPermissions } from '../hooks/useServerPermissions'
 import { useUserSettings } from '../contexts/UserSettingsContext'
 import { useBackend, servers, invites, emojis, uploadServerEmoji } from '../lib/api'
 import { formatDateShort, formatDateTime } from '../lib/formatDate'
 
-const ROLE_PERMISSIONS = [
-  CHANNEL_PERMISSIONS.VIEW_CHANNEL,
-  CHANNEL_PERMISSIONS.SEND_MESSAGES,
-  CHANNEL_PERMISSIONS.MANAGE_CHANNEL,
-  CHANNEL_PERMISSIONS.CONNECT,
-  CHANNEL_PERMISSIONS.SPEAK,
-  CHANNEL_PERMISSIONS.ADMINISTRATOR,
-] as const
-
 const BANNER_COLORS = [
   '#4f545c', '#f47b67', '#ed4245', '#faa61a', '#fee75c',
   '#9b59b6', '#5865f2', '#57f287', '#43b581', '#3ba55d',
+]
+
+const ROLE_COLORS = [
+  '#99aab5', '#95a5a6', '#7f8c8d', '#7289da', '#5865f2',
+  '#57f287', '#43b581', '#3ba55d', '#faa61a', '#faa81a',
+  '#f47b67', '#ed4245', '#eb459e', '#9b59b6', '#5865f2',
+  '#3ba55d', '#57f287', '#fee75c', '#faa61a', '#ed4245',
 ]
 
 type Tab =
@@ -87,6 +84,7 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   const [inviteCode, setInviteCode] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([])
+  const [roleEditTab, setRoleEditTab] = useState<'anzeige' | 'berechtigungen' | 'links' | 'mitglieder'>('anzeige')
 
   const fetchRoles = async () => {
     if (backend) {
@@ -319,16 +317,19 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
     }
   }
 
-  const handleCreateRole = async () => {
-    if (!newRoleName.trim()) return
+  const handleCreateRole = async (name?: string, color?: string) => {
+    const roleName = (name ?? newRoleName).trim()
+    const roleColor = color ?? newRoleColor
+    if (!roleName) return
     setError(null)
     setLoading(true)
     if (backend) {
       try {
-        await servers.createRole(server.id, { name: newRoleName.trim(), color: newRoleColor })
+        const created = await servers.createRole(server.id, { name: roleName, color: roleColor })
         setNewRoleName('')
         setNewRoleColor('#99aab5')
-        fetchRoles()
+        await fetchRoles()
+        if (created) setSelectedRole(created as ServerRole)
       } catch (e) {
         setError((e as Error).message)
       }
@@ -336,20 +337,21 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
       return
     }
     const maxPos = Math.max(0, ...roles.map((r) => r.position))
-    const { error: err } = await supabase.from('server_roles').insert({
+    const { data: created, error: err } = await supabase.from('server_roles').insert({
       server_id: server.id,
-      name: newRoleName.trim(),
-      color: newRoleColor,
+      name: roleName,
+      color: roleColor,
       position: maxPos + 1,
       permissions: 3147264,
-    })
+    }).select().single()
     setLoading(false)
     if (err) {
       setError(err.message)
     } else {
       setNewRoleName('')
       setNewRoleColor('#99aab5')
-      fetchRoles()
+      await fetchRoles()
+      if (created) setSelectedRole(created as ServerRole)
     }
   }
 
@@ -845,39 +847,35 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
 
               {tab === 'rollen' && (
                 <div className="flex h-full">
-                  <div className="w-48 flex-shrink-0 border-r border-[var(--border)] flex flex-col">
-                    <div className="p-3 border-b border-[var(--border)] space-y-2">
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={newRoleName}
-                          onChange={(e) => setNewRoleName(e.target.value)}
-                          placeholder="Neue Rolle"
-                          className="flex-1 px-2 py-1.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-primary)]"
-                        />
-                        <input
-                          type="color"
-                          value={newRoleColor}
-                          onChange={(e) => setNewRoleColor(e.target.value)}
-                          className="w-8 h-8 rounded cursor-pointer border border-[var(--border)] flex-shrink-0"
-                        />
-                      </div>
+                  {/* Linke Sidebar: ZURÜCK, +, Rollenliste */}
+                  <div className="w-48 flex-shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--bg-tertiary)]">
+                    <div className="p-3 border-b border-[var(--border)] flex items-center gap-2">
                       <button
-                        onClick={handleCreateRole}
-                        disabled={loading || !newRoleName.trim()}
-                        className="w-full px-3 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                        onClick={() => setSelectedRole(null)}
+                        className="p-1.5 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                        title="Zurück"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                      </button>
+                      <span className="text-xs font-semibold text-[var(--text-muted)] uppercase">Zurück</span>
+                      <button
+                        onClick={() => handleCreateRole('Neue Rolle', '#99aab5')}
+                        disabled={loading}
+                        className="ml-auto p-1.5 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                        title="Neue Rolle"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                         </svg>
-                        Rolle erstellen
                       </button>
                     </div>
                     <div className="flex-1 overflow-y-auto py-2">
                       {roles.map((role) => (
                         <button
                           key={role.id}
-                          onClick={() => setSelectedRole(role)}
+                          onClick={() => { setSelectedRole(role); setRoleEditTab('anzeige') }}
                           className={`w-full px-3 py-2.5 flex items-center gap-2 text-left hover:bg-[var(--bg-modifier-hover)] ${
                             selectedRole?.id === role.id ? 'bg-[var(--bg-modifier-active)]' : ''
                           }`}
@@ -893,76 +891,253 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                       ))}
                     </div>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-6">
+                  {/* Rechtes Panel: Rolle bearbeiten */}
+                  <div className="flex-1 flex flex-col min-w-0">
                     {selectedRole ? (
-                      <div className="space-y-6">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="color"
-                              value={selectedRole.color}
-                              onChange={(e) =>
-                                handleUpdateRole(selectedRole, { color: e.target.value })
-                              }
-                              className="w-10 h-10 rounded cursor-pointer border border-[var(--border)]"
-                            />
-                            <input
-                              type="text"
-                              value={selectedRole.name}
-                              onChange={(e) =>
-                                setSelectedRole({ ...selectedRole, name: e.target.value })
-                              }
-                              onBlur={() =>
-                                handleUpdateRole(selectedRole, { name: selectedRole.name })
-                              }
-                              className="px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] font-medium"
-                            />
+                      <>
+                        {/* Header mit Tabs */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-6 py-4 border-b border-[var(--border)] flex-shrink-0">
+                          <h3 className="text-lg font-semibold text-[var(--text-primary)] truncate">
+                            Rolle bearbeiten — {selectedRole.name}
+                          </h3>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="flex gap-1 border-b border-[var(--border)] overflow-x-auto">
+                              {(['anzeige', 'berechtigungen', 'links', 'mitglieder'] as const).map((t) => (
+                                <button
+                                  key={t}
+                                  onClick={() => setRoleEditTab(t)}
+                                  className={`px-3 py-2 text-sm font-medium ${
+                                    roleEditTab === t
+                                      ? 'text-[var(--text-primary)] border-b-2 border-[var(--accent)] -mb-px'
+                                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                                  }`}
+                                >
+                                  {t === 'anzeige' && 'Anzeige'}
+                                  {t === 'berechtigungen' && 'Berechtigungen'}
+                                  {t === 'links' && 'Links'}
+                                  {t === 'mitglieder' && `Mitglieder verwalten (${members.filter((m) => m.roles.some((r) => r.id === selectedRole.id)).length})`}
+                                </button>
+                              ))}
+                            </div>
+                            {selectedRole.name !== 'Admin' && selectedRole.name !== 'Member' && (
+                              <button
+                                onClick={() => handleDeleteRole(selectedRole)}
+                                className="p-2 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--accent-danger)]"
+                                title="Rolle löschen"
+                              >
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            )}
                           </div>
-                          {selectedRole.name !== 'Admin' && selectedRole.name !== 'Member' && (
-                            <button
-                              onClick={() => handleDeleteRole(selectedRole)}
-                              className="px-3 py-1.5 rounded text-[var(--accent-danger)] hover:bg-[var(--accent-danger)]/20 text-sm font-medium"
-                            >
-                              Rolle löschen
-                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-6">
+                          {roleEditTab === 'anzeige' && (
+                            <div className="flex flex-col gap-6 max-w-xl">
+                              <div>
+                                <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Rollenname *</label>
+                                <input
+                                  type="text"
+                                  value={selectedRole.name}
+                                  onChange={(e) => setSelectedRole({ ...selectedRole, name: e.target.value })}
+                                  onBlur={() => handleUpdateRole(selectedRole, { name: selectedRole.name })}
+                                  className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)]"
+                                />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-semibold text-[var(--text-primary)] mb-2">Rollenstil</h4>
+                                <div className="flex gap-3">
+                                  <div className="flex-1 p-4 rounded-lg border-2 border-[var(--accent)] bg-[var(--bg-tertiary)]">
+                                    <div className="w-12 h-12 rounded-full bg-[var(--bg-secondary)] flex items-center justify-center mb-2" style={{ backgroundColor: `${selectedRole.color}40` }}>
+                                      <span className="text-2xl">👤</span>
+                                    </div>
+                                    <p className="text-sm text-[var(--text-muted)] mb-2">Beispiel</p>
+                                    <span className="inline-block px-3 py-1 rounded text-sm font-medium" style={{ backgroundColor: `${selectedRole.color}30`, color: selectedRole.color }}>Fest</span>
+                                  </div>
+                                  <div className="flex-1 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-tertiary)] opacity-50">
+                                    <div className="w-12 h-12 rounded-full bg-[var(--bg-secondary)] flex items-center justify-center mb-2" style={{ background: `linear-gradient(135deg, ${selectedRole.color}, #999)` }}>
+                                      <span className="text-2xl">👤</span>
+                                    </div>
+                                    <p className="text-sm text-[var(--text-muted)] mb-2">Beispiel</p>
+                                    <span className="inline-block px-3 py-1 rounded text-sm text-[var(--text-muted)]">Farbverlauf</span>
+                                  </div>
+                                  <div className="flex-1 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg-tertiary)] opacity-50">
+                                    <div className="w-12 h-12 rounded-full bg-[var(--bg-secondary)] flex items-center justify-center mb-2">
+                                      <span className="text-2xl">👤</span>
+                                    </div>
+                                    <p className="text-sm text-[var(--text-muted)] mb-2">Beispiel</p>
+                                    <span className="inline-block px-3 py-1 rounded text-sm text-[var(--text-muted)]">Holografisch</span>
+                                  </div>
+                                </div>
+                                <p className="text-[var(--text-muted)] text-sm mt-2">Bestimmte Rollen magisch machen</p>
+                                <p className="text-[var(--text-muted)] text-sm">Schalte neue Rollenstile mit Boosts frei.</p>
+                                <button type="button" className="mt-2 px-4 py-2 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-modifier-hover)] text-sm font-medium text-[var(--text-primary)] flex items-center gap-2">
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                                  Mit Boosts freischalten
+                                </button>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Farbe der Rolle *</label>
+                                <p className="text-sm text-[var(--text-muted)] mb-3">Mitglieder verwenden die Farbe der höchsten Rolle, der sie zugeordnet sind.</p>
+                                <div className="flex flex-wrap gap-2">
+                                  <input
+                                    type="color"
+                                    value={selectedRole.color}
+                                    onChange={(e) => handleUpdateRole(selectedRole, { color: e.target.value })}
+                                    className="w-10 h-10 rounded cursor-pointer border-2 border-[var(--accent)] flex-shrink-0"
+                                  />
+                                  {ROLE_COLORS.map((c) => (
+                                    <button
+                                      key={c}
+                                      type="button"
+                                      onClick={() => handleUpdateRole(selectedRole, { color: c })}
+                                      className={`w-8 h-8 rounded flex-shrink-0 ${
+                                        selectedRole.color.toLowerCase() === c.toLowerCase() ? 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--bg-secondary)]' : ''
+                                      }`}
+                                      style={{ backgroundColor: c }}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold uppercase text-[var(--text-muted)] mb-2">Rollenicon <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)]">LVL 2</span></label>
+                                <p className="text-sm text-[var(--text-muted)] mb-3">Lade ein Bild hoch, das kleiner als 256 kB ist, oder wähle ein benutzerdefiniertes Emoji von diesem Server aus. Wir raten dir, ein Bild mit mindestens 64x64 Pixeln zu verwenden.</p>
+                                <button type="button" className="px-4 py-2 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-modifier-hover)] text-sm font-medium text-[var(--text-primary)] flex items-center gap-2">
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                  Bild auswählen
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                                <span className="text-sm text-[var(--text-primary)]">Mitglieder in der rechten Anzeige anhand ihrer Rollen gruppieren</span>
+                                <button type="button" className="relative w-12 h-6 rounded-full bg-[var(--accent)]">
+                                  <span className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform translate-x-6" />
+                                </button>
+                              </div>
+                              <div className="flex items-center justify-between p-3 rounded bg-[var(--bg-tertiary)]">
+                                <div>
+                                  <span className="text-sm text-[var(--text-primary)]">Jedem erlauben, diese Rolle zu @Erwähnen</span>
+                                  <p className="text-xs text-[var(--text-muted)] mt-1">Mitglieder mit der Berechtigung, @everyone, @here und alle Rollen zu erwähnen, können auch diese Rolle anpingen.</p>
+                                </div>
+                                <button type="button" className="relative w-12 h-6 rounded-full bg-[var(--bg-secondary)] flex-shrink-0">
+                                  <span className="absolute top-0.5 left-0.5 block w-5 h-5 rounded-full bg-white shadow transition-transform" />
+                                </button>
+                              </div>
+                              <div className="p-4 rounded bg-[var(--bg-tertiary)]">
+                                <h4 className="text-sm font-semibold text-[var(--text-primary)] mb-2">Server mit Rolle betrachten</h4>
+                                <p className="text-sm text-[var(--text-muted)] mb-3">Dadurch kannst du ausprobieren, welche Aktionen diese Rolle ausführen kann und welche Kanäle für sie sichtbar sind. Nur für Servereigentümer und Administratoren verfügbar.</p>
+                                <button type="button" className="px-4 py-2 rounded bg-[var(--bg-secondary)] hover:bg-[var(--bg-modifier-hover)] text-sm font-medium text-[var(--text-primary)] flex items-center gap-2">
+                                  Server mit Rolle betrachten
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          {roleEditTab === 'berechtigungen' && (
+                            <div className="max-w-xl space-y-6">
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Berechtigungen</h4>
+                                <button type="button" className="text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                                  Berechtigungen löschen
+                                </button>
+                              </div>
+                              {PERMISSION_GROUPS.map((group) => (
+                                <div key={group.title}>
+                                  <h5 className="text-sm font-semibold text-[var(--text-primary)] mb-3">{group.title}</h5>
+                                  <div className="space-y-2">
+                                    {group.permissions.map((perm) => (
+                                      <div
+                                        key={perm.key}
+                                        className="flex items-start justify-between gap-4 p-3 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-modifier-hover)]"
+                                      >
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="text-sm font-medium text-[var(--text-primary)]">{perm.label}</span>
+                                            <label className="relative w-12 h-6 rounded-full flex-shrink-0 cursor-pointer">
+                                              <input
+                                                type="checkbox"
+                                                checked={hasPermission(selectedRole.permissions ?? 0, perm.value)}
+                                                onChange={(e) =>
+                                                  handleUpdateRolePermission(selectedRole, perm.value, e.target.checked)
+                                                }
+                                                className="sr-only peer"
+                                              />
+                                              <span className="block w-full h-full rounded-full bg-[var(--bg-secondary)] peer-checked:bg-[var(--accent)] transition-colors" />
+                                              <span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-7" />
+                                            </label>
+                                          </div>
+                                          <p className="text-xs text-[var(--text-muted)] mt-1">{perm.description}</p>
+                                          {perm.warning && (
+                                            <div className="flex items-start gap-2 mt-2 p-2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                                              <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                              </svg>
+                                              <span className="text-xs">{perm.warning}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {roleEditTab === 'links' && (
+                            <div className="max-w-xl">
+                              <p className="text-sm text-[var(--text-muted)]">Rollen-Links werden in einer späteren Version unterstützt.</p>
+                            </div>
+                          )}
+                          {roleEditTab === 'mitglieder' && (
+                            <div className="max-w-xl">
+                              <h4 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Mitglieder mit dieser Rolle</h4>
+                              <div className="space-y-2">
+                                {members.filter((m) => m.roles.some((r) => r.id === selectedRole.id)).map(({ profile }) => (
+                                  <div key={profile.id} className="flex items-center gap-3 px-3 py-2 rounded bg-[var(--bg-tertiary)]">
+                                    <div className="w-8 h-8 rounded-full overflow-hidden bg-[var(--bg-secondary)] flex-shrink-0">
+                                      {profile.avatar_url ? (
+                                        <img src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                                      ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-xs font-bold text-[var(--text-muted)]">
+                                          {profile.username.charAt(0).toUpperCase()}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <span className="text-sm font-medium text-[var(--text-primary)]">{profile.username}</span>
+                                  </div>
+                                ))}
+                                {members.filter((m) => m.roles.some((r) => r.id === selectedRole.id)).length === 0 && (
+                                  <p className="text-sm text-[var(--text-muted)]">Keine Mitglieder mit dieser Rolle.</p>
+                                )}
+                              </div>
+                            </div>
                           )}
                         </div>
-                        <div>
-                          <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-3">
-                            Berechtigungen
-                          </h4>
-                          <div className="space-y-2">
-                            {ROLE_PERMISSIONS.map((perm) => (
-                              <label
-                                key={perm}
-                                className="flex items-center gap-3 p-2 rounded hover:bg-[var(--bg-modifier-hover)] cursor-pointer"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={hasPermission(selectedRole.permissions ?? 0, perm)}
-                                  onChange={(e) =>
-                                    handleUpdateRolePermission(
-                                      selectedRole,
-                                      perm,
-                                      e.target.checked
-                                    )
-                                  }
-                                  className="w-4 h-4 rounded border-[var(--border)] accent-[var(--accent)]"
-                                />
-                                <span className="text-sm text-[var(--text-secondary)]">
-                                  {PERMISSION_LABELS[perm] ?? 'Administrator'}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
+                      </>
+                    ) : (
+                      <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-[var(--text-muted)]">
+                        <p className="text-sm mb-2">Wähle eine Rolle zum Bearbeiten</p>
+                        <p className="text-xs">Oder klicke auf + um eine neue Rolle zu erstellen</p>
+                        <div className="mt-4 flex gap-2">
+                          <input
+                            type="text"
+                            value={newRoleName}
+                            onChange={(e) => setNewRoleName(e.target.value)}
+                            placeholder="Rollenname"
+                            className="px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-primary)] w-40"
+                          />
+                          <input type="color" value={newRoleColor} onChange={(e) => setNewRoleColor(e.target.value)} className="w-10 h-10 rounded cursor-pointer border border-[var(--border)]" />
+                          <button
+                            onClick={handleCreateRole}
+                            disabled={loading || !newRoleName.trim()}
+                            className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm font-medium disabled:opacity-50"
+                          >
+                            Rolle erstellen
+                          </button>
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center text-[var(--text-muted)]">
-                        <p className="text-sm">Wähle eine Rolle zum Bearbeiten</p>
-                      </div>
                     )}
-                    {error && <p className="mt-4 text-[var(--accent-danger)] text-sm">{error}</p>}
+                    {error && <p className="px-6 pb-4 text-[var(--accent-danger)] text-sm">{error}</p>}
                   </div>
                 </div>
               )}

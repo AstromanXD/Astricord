@@ -9,7 +9,9 @@ interface MemberContextMenuProps {
   y: number
   member: { userId: string; profile: Profile; roles: ServerRole[] }
   roles: ServerRole[]
-  isAdmin: boolean
+  canManageRoles: boolean
+  canKickMembers: boolean
+  canBanMembers: boolean
   isSelf: boolean
   onClose: () => void
   onProfil: () => void
@@ -26,7 +28,9 @@ export function MemberContextMenu({
   y,
   member,
   roles,
-  isAdmin,
+  canManageRoles,
+  canKickMembers,
+  canBanMembers,
   isSelf,
   onClose,
   onProfil,
@@ -101,7 +105,7 @@ export function MemberContextMenu({
         Erwähnung
       </button>
 
-      {isAdmin && (
+      {canManageRoles && (
         <>
           <div className="my-1 border-t border-[var(--border)]" />
 
@@ -155,7 +159,7 @@ export function MemberContextMenu({
         </>
       )}
 
-      {isAdmin && !isSelf && (onKick || onBan) && (
+      {!isSelf && ((canKickMembers && onKick) || (canBanMembers && onBan)) && (
         <>
           <div className="my-1 border-t border-[var(--border)]" />
           {onKick && (

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { pool } from '../config/db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { PERMISSIONS, hasPermission, getEffectivePermissions } from '../lib/permissions.js'
 
 const router = Router()
 router.use(authMiddleware)
@@ -14,15 +15,9 @@ async function isMember(serverId, userId) {
   return rows.length > 0
 }
 
-async function isAdmin(serverId, userId) {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM server_members sm
-     JOIN server_member_roles smr ON sm.server_id = smr.server_id AND sm.user_id = smr.user_id
-     JOIN server_roles sr ON smr.role_id = sr.id
-     WHERE sm.server_id = ? AND sm.user_id = ? AND sr.name = 'Admin'`,
-    [serverId, userId]
-  )
-  return rows.length > 0
+async function checkPerm(serverId, userId, flag) {
+  const perms = await getEffectivePermissions(pool, serverId, userId)
+  return hasPermission(perms, flag)
 }
 
 // GET /channels?serverId=xxx
@@ -33,6 +28,9 @@ router.get('/', async (req, res) => {
 
     const member = await isMember(serverId, req.user.id)
     if (!member) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const canView = await checkPerm(serverId, req.user.id, PERMISSIONS.VIEW_CHANNEL)
+    if (!canView) return res.json([])
 
     const [rows] = await pool.execute(
       `SELECT id, server_id, category_id, name, type, position, created_at
@@ -58,8 +56,8 @@ router.post('/', async (req, res) => {
     const { server_id, name, type, category_id, position } = req.body
     if (!server_id || !name) return res.status(400).json({ error: 'server_id und name erforderlich' })
 
-    const admin = await isAdmin(server_id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(server_id, req.user.id, PERMISSIONS.MANAGE_CHANNELS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const id = uuidv4()
     await pool.execute(
@@ -86,8 +84,8 @@ router.patch('/:id', async (req, res) => {
     const [ch] = await pool.execute('SELECT server_id FROM channels WHERE id = ?', [req.params.id])
     if (!ch.length) return res.status(404).json({ error: 'Kanal nicht gefunden' })
 
-    const admin = await isAdmin(ch[0].server_id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(ch[0].server_id, req.user.id, PERMISSIONS.MANAGE_CHANNELS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const { name, type, category_id, position } = req.body
     const updates = []
@@ -120,8 +118,8 @@ router.delete('/:id', async (req, res) => {
     const [ch] = await pool.execute('SELECT server_id FROM channels WHERE id = ?', [req.params.id])
     if (!ch.length) return res.status(404).json({ error: 'Kanal nicht gefunden' })
 
-    const admin = await isAdmin(ch[0].server_id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(ch[0].server_id, req.user.id, PERMISSIONS.MANAGE_CHANNELS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     await pool.execute('DELETE FROM channels WHERE id = ?', [req.params.id])
     res.status(204).send()

@@ -8,7 +8,8 @@ interface ServerContextMenuProps {
   x: number
   y: number
   server: Server
-  isAdmin: boolean
+  canManageServer: boolean
+  canManageChannels: boolean
   onClose: () => void
   onServerSettings: () => void
   onAddChannel?: () => void
@@ -18,7 +19,8 @@ export function ServerContextMenu({
   x,
   y,
   server,
-  isAdmin,
+  canManageServer,
+  canManageChannels,
   onClose,
   onServerSettings,
   onAddChannel,
@@ -79,7 +81,7 @@ export function ServerContextMenu({
         Zu Server einladen
       </button>
 
-      {isAdmin && (
+      {canManageServer && (
         <button
           onClick={() => {
             onServerSettings()
@@ -95,7 +97,7 @@ export function ServerContextMenu({
         </button>
       )}
 
-      {isAdmin && (
+      {canManageChannels && (
         <>
           <button
             onClick={() => {

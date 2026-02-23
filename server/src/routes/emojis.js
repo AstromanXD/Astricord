@@ -2,19 +2,14 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { pool } from '../config/db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { PERMISSIONS, hasPermission, getEffectivePermissions } from '../lib/permissions.js'
 
 const router = Router()
 router.use(authMiddleware)
 
-async function isAdmin(serverId, userId) {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM server_members sm
-     JOIN server_member_roles smr ON sm.server_id = smr.server_id AND sm.user_id = smr.user_id
-     JOIN server_roles sr ON smr.role_id = sr.id
-     WHERE sm.server_id = ? AND sm.user_id = ? AND sr.name = 'Admin'`,
-    [serverId, userId]
-  )
-  return rows.length > 0
+async function checkPerm(serverId, userId, flag) {
+  const perms = await getEffectivePermissions(pool, serverId, userId)
+  return hasPermission(perms, flag)
 }
 
 // GET /emojis?serverId=xxx
@@ -46,8 +41,8 @@ router.post('/', async (req, res) => {
     const { server_id, name, image_url } = req.body
     if (!server_id || !name || !image_url) return res.status(400).json({ error: 'server_id, name und image_url erforderlich' })
 
-    const admin = await isAdmin(server_id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(server_id, req.user.id, PERMISSIONS.CREATE_EXPRESSIONS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const id = uuidv4()
     await pool.execute(
@@ -73,8 +68,8 @@ router.delete('/:id', async (req, res) => {
     const [em] = await pool.execute('SELECT server_id FROM server_emojis WHERE id = ?', [req.params.id])
     if (!em.length) return res.status(404).json({ error: 'Emoji nicht gefunden' })
 
-    const admin = await isAdmin(em[0].server_id, req.user.id)
-    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const ok = await checkPerm(em[0].server_id, req.user.id, PERMISSIONS.MANAGE_EXPRESSIONS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     await pool.execute('DELETE FROM server_emojis WHERE id = ?', [req.params.id])
     res.status(204).send()

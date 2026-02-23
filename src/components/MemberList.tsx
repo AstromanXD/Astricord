@@ -24,10 +24,10 @@ interface MemberListProps {
 }
 
 export function MemberList({ serverId, onOpenDm }: MemberListProps) {
-  const { user } = useAuth()
+  const { user, profile: authProfile } = useAuth()
   const backend = useBackend()
   const { onlineUserIds } = usePresence()
-  const { isAdmin } = useServerPermissions(serverId)
+  const { canManageRoles, canKickMembers, canBanMembers } = useServerPermissions(serverId)
   const [members, setMembers] = useState<MemberWithRoles[]>([])
   const [roles, setRoles] = useState<ServerRole[]>([])
   const [loading, setLoading] = useState(false)
@@ -113,6 +113,15 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
 
     load()
   }, [serverId, user?.id, backend])
+
+  useEffect(() => {
+    if (!authProfile || !user) return
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.userId === user.id ? { ...m, profile: { ...m.profile, ...authProfile } } : m
+      )
+    )
+  }, [authProfile, user?.id])
 
   const handleContextMenu = (e: React.MouseEvent, member: MemberWithRoles) => {
     e.preventDefault()
@@ -235,9 +244,18 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     )
   }
 
+  const statusStyle: Record<string, { bg: string; label: string }> = {
+    online: { bg: 'bg-[var(--accent-success)]', label: 'Online' },
+    away: { bg: 'bg-yellow-500', label: 'Abwesend' },
+    dnd: { bg: 'bg-red-500', label: 'Bitte nicht stören' },
+    offline: { bg: 'bg-[var(--text-muted)]', label: 'Offline' },
+  }
+
   const MemberRow = ({ m, color }: { m: MemberWithRoles; color?: string }) => {
-    const profileStatus = (m.profile as { status?: string | null }).status
-    const isOnline = onlineUserIds.has(m.userId) && profileStatus !== 'offline'
+    const profile = getEffectiveProfile(m)
+    const profileStatus = ((profile as { status?: string | null }).status || 'online') as keyof typeof statusStyle
+    const isOffline = !onlineUserIds.has(m.userId) || profileStatus === 'offline'
+    const style = isOffline ? statusStyle.offline : (statusStyle[profileStatus] ?? statusStyle.online)
     const rowRef = useRef<HTMLDivElement>(null)
     return (
     <div
@@ -252,22 +270,22 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     >
       <div className="relative w-8 h-8 rounded-full overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0">
         <span
-          className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[var(--bg-secondary)] ${isOnline ? 'bg-[var(--accent-success)]' : 'bg-[var(--text-muted)]'}`}
-          title={isOnline ? 'Online' : 'Offline'}
+          className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[var(--bg-secondary)] ${style.bg}`}
+          title={style.label}
         />
-        {m.profile.avatar_url ? (
-          <img src={m.profile.avatar_url} alt="" className="w-full h-full object-cover" />
+        {profile.avatar_url ? (
+          <img src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-xs font-bold text-[var(--text-muted)]">
-            {m.profile.username.charAt(0).toUpperCase()}
+            {profile.username.charAt(0).toUpperCase()}
           </div>
         )}
       </div>
       <span
-        className={`text-sm truncate ${!isOnline ? 'opacity-70' : ''}`}
+        className={`text-sm truncate ${isOffline ? 'opacity-70' : ''}`}
         style={color ? { color } : undefined}
       >
-        {m.profile.username}
+        {profile.username}
       </span>
     </div>
   )}
@@ -282,9 +300,13 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     )
   }
 
-  const onlineCount = members.filter(
-    (m) => onlineUserIds.has(m.userId) && (m.profile as { status?: string | null }).status !== 'offline'
-  ).length
+  const getEffectiveProfile = (m: MemberWithRoles) =>
+    m.userId === user?.id && authProfile ? { ...m.profile, ...authProfile } : m.profile
+  const isDisplayOnline = (m: MemberWithRoles) => {
+    const profile = getEffectiveProfile(m)
+    return onlineUserIds.has(m.userId) && (profile as { status?: string | null }).status !== 'offline'
+  }
+  const onlineCount = members.filter(isDisplayOnline).length
 
   const groupByRole = (list: MemberWithRoles[]) => {
     const grouped = new Map<string, MemberWithRoles[]>()
@@ -302,12 +324,9 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     return { grouped, noRole }
   }
 
-  const isDisplayOnline = (m: MemberWithRoles) =>
-    onlineUserIds.has(m.userId) && (m.profile as { status?: string | null }).status !== 'offline'
   const onlineMembers = members.filter(isDisplayOnline)
   const offlineMembers = members.filter((m) => !isDisplayOnline(m))
   const { grouped: onlineByRole, noRole: onlineNoRole } = groupByRole(onlineMembers)
-  const { grouped: offlineByRole, noRole: offlineNoRole } = groupByRole(offlineMembers)
 
   const roleOrder = [...roles].sort((a, b) => b.position - a.position)
 
@@ -382,7 +401,9 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
               <span className="text-xs font-semibold uppercase truncate">Offline</span>
               <span className="text-xs">— {offlineMembers.length}</span>
             </div>
-            {renderRoleSection(offlineByRole, offlineNoRole, (r) => r.color)}
+            {offlineMembers.map((m) => (
+              <MemberRow key={m.userId} m={m} color={([...m.roles].sort((a, b) => b.position - a.position)[0] as ServerRole | undefined)?.color} />
+            ))}
           </div>
         )}
       </div>
@@ -392,10 +413,7 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
           x={profilePopover.x}
           y={profilePopover.y}
           member={profilePopover.member}
-          isOnline={
-            onlineUserIds.has(profilePopover.member.userId) &&
-            (profilePopover.member.profile as { status?: string | null }).status !== 'offline'
-          }
+          isOnline={isDisplayOnline(profilePopover.member)}
           isSelf={profilePopover.member.userId === user?.id}
           onClose={() => setProfilePopover(null)}
           onOpenDm={onOpenDm}
@@ -408,7 +426,9 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
           y={contextMenu.y}
           member={contextMenu.member}
           roles={roles}
-          isAdmin={isAdmin}
+          canManageRoles={canManageRoles}
+          canKickMembers={canKickMembers}
+          canBanMembers={canBanMembers}
           isSelf={contextMenu.member.userId === user?.id}
           onClose={() => setContextMenu(null)}
           onProfil={() => {
@@ -421,8 +441,8 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
             navigator.clipboard.writeText(contextMenu.member.userId)
           }}
           onRoleToggle={handleRoleToggle}
-          onKick={isAdmin ? handleKick : undefined}
-          onBan={isAdmin ? handleBan : undefined}
+          onKick={canKickMembers ? handleKick : undefined}
+          onBan={canBanMembers ? handleBan : undefined}
           onBlock={handleBlock}
         />
       )}

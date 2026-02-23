@@ -237,7 +237,7 @@ export const servers = {
     api<ApiServer>(`/api/servers/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => api(`/api/servers/${id}`, { method: 'DELETE' }),
   join: (code: string) => api<ApiServer>('/api/servers/join', { method: 'POST', body: JSON.stringify({ code }) }),
-  getPermissions: (id: string) => api<{ isAdmin: boolean }>(`/api/servers/${id}/permissions`),
+  getPermissions: (id: string) => api<{ isAdmin: boolean; isOwner: boolean; permissions: number }>(`/api/servers/${id}/permissions`),
   getMembers: (id: string) => api<string[]>(`/api/servers/${id}/members`),
   getMembersDetail: (id: string) =>
     api<{ members: { userId: string; profile: ApiProfile; roles: { id: string; name: string; color: string; position: number }[] }[]; roles: { id: string; name: string; color: string; position: number }[] }>(

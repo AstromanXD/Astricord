@@ -32,7 +32,8 @@ function ChannelCategory({
   onDelete,
   collapsed,
   onToggle,
-  isAdmin,
+  canManageServer,
+  canManageChannels,
   onServerSettings,
   onAddChannel,
   voiceSessionsByChannel,
@@ -47,7 +48,8 @@ function ChannelCategory({
   onDelete: (ch: Channel) => void
   collapsed: boolean
   onToggle: () => void
-  isAdmin: boolean
+  canManageServer: boolean
+  canManageChannels: boolean
   onServerSettings?: () => void
   onAddChannel?: () => void
   voiceSessionsByChannel?: Map<string, { userId: string; username: string; avatarUrl: string | null; isMuted: boolean; hasVideo?: boolean; isScreenSharing?: boolean }[]>
@@ -73,9 +75,9 @@ function ChannelCategory({
           {icon}
           <span className="text-xs font-semibold uppercase truncate">{title}</span>
         </button>
-        {isAdmin && (onServerSettings || onAddChannel) && (
+        {(canManageServer || canManageChannels) && (onServerSettings || onAddChannel) && (
           <div className="flex items-center gap-0.5 opacity-0 group-hover/cat:opacity-100 transition-opacity flex-shrink-0">
-            {onServerSettings && (
+            {onServerSettings && canManageServer && (
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -90,7 +92,7 @@ function ChannelCategory({
                 </svg>
               </button>
             )}
-            {onAddChannel && (
+            {onAddChannel && canManageChannels && (
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -131,7 +133,7 @@ function ChannelCategory({
                   )}
                   <span className="truncate">{ch.name}</span>
                 </button>
-                {isAdmin && (
+                {canManageChannels && (
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity pr-1">
                     <button
                       onClick={(e) => {
@@ -228,7 +230,7 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
   const voiceSessionsByChannel = useVoiceSessions(serverId, voiceChannelIds)
 
   const backend = useBackend()
-  const { isAdmin } = useServerPermissions(serverId)
+  const { canManageServer, canManageChannels } = useServerPermissions(serverId)
 
   const fetchChannels = useCallback(async () => {
     if (!serverId) return
@@ -339,7 +341,8 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
           x={dropdownPos.x}
           y={dropdownPos.y}
           server={server}
-          isAdmin={isAdmin}
+          canManageServer={canManageServer}
+          canManageChannels={canManageChannels}
           onClose={() => setShowServerDropdown(false)}
           onServerSettings={() => setShowServerSettings(true)}
           onAddChannel={() => setModalChannel('create')}
@@ -360,7 +363,8 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
           onDelete={setDeleteConfirm}
           collapsed={textCollapsed}
           onToggle={() => setTextCollapsed(!textCollapsed)}
-          isAdmin={isAdmin}
+          canManageServer={canManageServer}
+          canManageChannels={canManageChannels}
           onServerSettings={() => setShowServerSettings(true)}
           onAddChannel={() => setModalChannel('create')}
         />
@@ -384,7 +388,8 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
           onDelete={setDeleteConfirm}
           collapsed={voiceCollapsed}
           onToggle={() => setVoiceCollapsed(!voiceCollapsed)}
-          isAdmin={isAdmin}
+          canManageServer={canManageServer}
+          canManageChannels={canManageChannels}
           onServerSettings={() => setShowServerSettings(true)}
           onAddChannel={() => setModalChannel('create')}
           voiceSessionsByChannel={voiceSessionsByChannel}
@@ -392,7 +397,7 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
         />
         {textChannels.length === 0 && voiceChannels.length === 0 && (
           <p className="px-4 py-2 text-sm text-[var(--text-muted)]">
-            {isAdmin ? 'Keine Channels — Klicke + um einen zu erstellen' : 'Keine Channels'}
+            {canManageChannels ? 'Keine Channels — Klicke + um einen zu erstellen' : 'Keine Channels'}
           </p>
         )}
       </div>

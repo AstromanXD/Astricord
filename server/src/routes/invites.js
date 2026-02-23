@@ -2,12 +2,18 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { pool } from '../config/db.js'
 import { authMiddleware } from '../middleware/auth.js'
+import { PERMISSIONS, hasPermission, getEffectivePermissions } from '../lib/permissions.js'
 
 const router = Router()
 router.use(authMiddleware)
 
 function randomCode() {
   return Math.random().toString(36).slice(2, 10)
+}
+
+async function checkPerm(serverId, userId, flag) {
+  const perms = await getEffectivePermissions(pool, serverId, userId)
+  return hasPermission(perms, flag)
 }
 
 router.post('/', async (req, res) => {
@@ -20,6 +26,9 @@ router.post('/', async (req, res) => {
       [server_id, req.user.id]
     )
     if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const ok = await checkPerm(server_id, req.user.id, PERMISSIONS.CREATE_INVITE)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung zum Erstellen von Einladungen' })
 
     const id = uuidv4()
     let code = randomCode()
@@ -58,6 +67,10 @@ router.get('/', async (req, res) => {
       [server_id, req.user.id]
     )
     if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const canManage = await checkPerm(server_id, req.user.id, PERMISSIONS.MANAGE_SERVER)
+    const canInvite = await checkPerm(server_id, req.user.id, PERMISSIONS.CREATE_INVITE)
+    if (!canManage && !canInvite) return res.status(403).json({ error: 'Keine Berechtigung' })
 
     const [rows] = await pool.execute(
       'SELECT id, server_id, code, created_by, created_at FROM server_invites WHERE server_id = ? ORDER BY created_at DESC LIMIT 50',

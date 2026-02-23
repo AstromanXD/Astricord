@@ -3,11 +3,12 @@ import { v4 as uuidv4 } from 'uuid'
 import { pool } from '../config/db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { broadcast } from '../lib/realtime.js'
+import { PERMISSIONS, hasPermission, getEffectivePermissions } from '../lib/permissions.js'
 
 const router = Router()
 router.use(authMiddleware)
 
-async function canAccessChannel(channelId, userId) {
+async function canAccessChannel(channelId, userId, requiredPerm = PERMISSIONS.VIEW_CHANNEL) {
   const [ch] = await pool.execute(
     'SELECT server_id FROM channels WHERE id = ?',
     [channelId]
@@ -17,7 +18,9 @@ async function canAccessChannel(channelId, userId) {
     'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
     [ch[0].server_id, userId]
   )
-  return m.length > 0
+  if (m.length === 0) return false
+  const perms = await getEffectivePermissions(pool, ch[0].server_id, userId)
+  return hasPermission(perms, requiredPerm)
 }
 
 async function canAccessDm(conversationId, userId) {
@@ -106,8 +109,8 @@ router.post('/', async (req, res) => {
     const atts = attachments ? JSON.stringify(attachments) : '[]'
 
     if (channel_id) {
-      const access = await canAccessChannel(channel_id, req.user.id)
-      if (!access) return res.status(403).json({ error: 'Kein Zugriff' })
+      const canSend = await canAccessChannel(channel_id, req.user.id, PERMISSIONS.SEND_MESSAGES)
+      if (!canSend) return res.status(403).json({ error: 'Keine Berechtigung zum Senden' })
 
       await pool.execute(
         'INSERT INTO messages (id, channel_id, user_id, content, attachments, parent_message_id) VALUES (?, ?, ?, ?, ?, ?)',
@@ -142,11 +145,26 @@ router.post('/', async (req, res) => {
 // PATCH /messages/:id
 router.patch('/:id', async (req, res) => {
   try {
-    const [existing] = await pool.execute('SELECT user_id FROM messages WHERE id = ?', [req.params.id])
+    const [existing] = await pool.execute(
+      'SELECT m.user_id, m.channel_id FROM messages m WHERE m.id = ?',
+      [req.params.id]
+    )
     if (!existing.length) return res.status(404).json({ error: 'Nachricht nicht gefunden' })
-    if (existing[0].user_id !== req.user.id) return res.status(403).json({ error: 'Keine Berechtigung' })
-
+    const isOwn = existing[0].user_id === req.user.id
     const { content, is_pinned } = req.body
+
+    if (existing[0].channel_id) {
+      const [ch] = await pool.execute('SELECT server_id FROM channels WHERE id = ?', [existing[0].channel_id])
+      if (ch.length) {
+        const perms = await getEffectivePermissions(pool, ch[0].server_id, req.user.id)
+        if (is_pinned !== undefined && !hasPermission(perms, PERMISSIONS.PIN_MESSAGES) && !hasPermission(perms, PERMISSIONS.MANAGE_MESSAGES)) {
+          return res.status(403).json({ error: 'Keine Berechtigung zum Anpinnen' })
+        }
+        if (!isOwn && content !== undefined && !hasPermission(perms, PERMISSIONS.MANAGE_MESSAGES)) {
+          return res.status(403).json({ error: 'Keine Berechtigung zum Bearbeiten fremder Nachrichten' })
+        }
+      }
+    }
     const updates = []
     const values = []
     if (content !== undefined) {
@@ -179,9 +197,23 @@ router.patch('/:id', async (req, res) => {
 // DELETE /messages/:id
 router.delete('/:id', async (req, res) => {
   try {
-    const [existing] = await pool.execute('SELECT user_id FROM messages WHERE id = ?', [req.params.id])
+    const [existing] = await pool.execute(
+      'SELECT m.user_id, m.channel_id FROM messages m WHERE m.id = ?',
+      [req.params.id]
+    )
     if (!existing.length) return res.status(404).json({ error: 'Nachricht nicht gefunden' })
-    if (existing[0].user_id !== req.user.id) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const isOwn = existing[0].user_id === req.user.id
+    if (!isOwn && existing[0].channel_id) {
+      const [ch] = await pool.execute('SELECT server_id FROM channels WHERE id = ?', [existing[0].channel_id])
+      if (ch.length) {
+        const perms = await getEffectivePermissions(pool, ch[0].server_id, req.user.id)
+        if (!hasPermission(perms, PERMISSIONS.MANAGE_MESSAGES)) {
+          return res.status(403).json({ error: 'Keine Berechtigung zum Löschen fremder Nachrichten' })
+        }
+      }
+    } else if (!isOwn && !existing[0].channel_id) {
+      return res.status(403).json({ error: 'Keine Berechtigung' })
+    }
 
     const [old] = await pool.execute('SELECT channel_id, dm_conversation_id FROM messages WHERE id = ?', [req.params.id])
     await pool.execute('DELETE FROM messages WHERE id = ?', [req.params.id])

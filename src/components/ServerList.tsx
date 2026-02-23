@@ -28,7 +28,7 @@ export function ServerList({ selectedServerId, onSelectServer, onOpenServerSetti
   const [showCreateModal, setShowCreateModal] = useState(false)
 
   const contextMenuServerId = contextMenu?.server.id ?? null
-  const { isAdmin } = useServerPermissions(contextMenuServerId)
+  const { canManageServer, canManageChannels } = useServerPermissions(contextMenuServerId)
   const hasAutoSelected = useRef(false)
 
   const loadServers = useCallback(async () => {
@@ -191,7 +191,8 @@ export function ServerList({ selectedServerId, onSelectServer, onOpenServerSetti
           x={contextMenu.x}
           y={contextMenu.y}
           server={contextMenu.server}
-          isAdmin={isAdmin}
+          canManageServer={canManageServer}
+          canManageChannels={canManageChannels}
           onClose={() => setContextMenu(null)}
           onServerSettings={() => onOpenServerSettings(contextMenu.server)}
         />

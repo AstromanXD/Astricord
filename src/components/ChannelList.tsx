@@ -16,6 +16,9 @@ interface ChannelListProps {
   serverId: string | null
   selectedChannelId: string | null
   onSelectChannel: (channel: Channel | null) => void
+  onJoinVoice?: (channelId: string) => Promise<void>
+  isInVoice?: boolean
+  currentVoiceChannelId?: string | null
   speakingUserIds?: Set<string>
 }
 
@@ -78,7 +81,7 @@ function ChannelCategory({
                   e.stopPropagation()
                   onServerSettings()
                 }}
-                className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
                 title="Server-Einstellungen"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -93,7 +96,7 @@ function ChannelCategory({
                   e.stopPropagation()
                   onAddChannel()
                 }}
-                className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
                 title="Kanal erstellen"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -110,7 +113,7 @@ function ChannelCategory({
           return (
             <div key={ch.id} className="mx-2">
               <div
-                className={`group rounded flex items-center gap-2 text-[var(--text-secondary)] hover:bg-[var(--bg-modifier-hover)] hover:text-[var(--text-primary)] ${
+                className={`group rounded flex items-center gap-2 text-[var(--text-secondary)] hover:bg-[var(--bg-modifier-hover)] hover:text-[var(--text-primary)] cursor-pointer ${
                   selectedId === ch.id ? 'bg-[var(--bg-modifier-active)] text-[var(--text-primary)]' : ''
                 }`}
               >
@@ -147,7 +150,7 @@ function ChannelCategory({
                         e.stopPropagation()
                         onDelete(ch)
                       }}
-                      className="p-1 rounded hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400"
+                      className="p-1 rounded hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400 cursor-pointer"
                       title="Löschen"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -209,7 +212,7 @@ function ChannelCategory({
   )
 }
 
-export function ChannelList({ serverId, selectedChannelId, onSelectChannel, speakingUserIds = new Set() }: ChannelListProps) {
+export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJoinVoice, isInVoice, currentVoiceChannelId, speakingUserIds = new Set() }: ChannelListProps) {
   const [channels, setChannels] = useState<Channel[]>([])
   const [server, setServer] = useState<Server | null>(null)
   const [textCollapsed, setTextCollapsed] = useState(false)
@@ -300,15 +303,15 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, spea
   return (
     <div className="w-60 flex flex-col overflow-hidden bg-[var(--bg-secondary)]">
       <div className="h-12 px-4 flex items-center justify-between gap-2 border-b border-[var(--border)] shadow-sm">
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            const rect = e.currentTarget.getBoundingClientRect()
-            setDropdownPos({ x: rect.left, y: rect.bottom })
-            setShowServerDropdown((prev) => !prev)
-          }}
-          className="flex items-center gap-1 min-w-0 flex-1 text-left group/name hover:text-[var(--text-primary)]"
-        >
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                const rect = e.currentTarget.getBoundingClientRect()
+                setDropdownPos({ x: rect.left, y: rect.bottom })
+                setShowServerDropdown((prev) => !prev)
+              }}
+              className="flex items-center gap-1 min-w-0 flex-1 text-left group/name hover:text-[var(--text-primary)] cursor-pointer"
+            >
           <span className="font-semibold text-[var(--text-primary)] truncate">
             {server?.name ?? 'Server'}
           </span>
@@ -321,7 +324,7 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, spea
           </svg>
         </button>
         <button
-          className="w-8 h-8 rounded flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-modifier-hover)] hover:text-[var(--text-primary)] flex-shrink-0"
+          className="w-8 h-8 rounded flex items-center justify-center text-[var(--text-muted)] hover:bg-[var(--bg-modifier-hover)] hover:text-[var(--text-primary)] flex-shrink-0 cursor-pointer"
           title="Zu Server einladen"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -371,7 +374,12 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, spea
           }
           channels={voiceChannels}
           selectedId={selectedChannelId}
-          onSelect={onSelectChannel}
+          onSelect={(ch) => {
+            onSelectChannel(ch)
+            if (onJoinVoice && (!isInVoice || currentVoiceChannelId !== ch.id)) {
+              onJoinVoice(ch.id)
+            }
+          }}
           onEdit={setModalChannel}
           onDelete={setDeleteConfirm}
           collapsed={voiceCollapsed}

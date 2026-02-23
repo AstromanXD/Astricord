@@ -48,6 +48,32 @@ router.post('/', async (req, res) => {
   }
 })
 
+router.get('/', async (req, res) => {
+  try {
+    const { server_id } = req.query
+    if (!server_id) return res.status(400).json({ error: 'server_id erforderlich' })
+
+    const [member] = await pool.execute(
+      'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
+      [server_id, req.user.id]
+    )
+    if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const [rows] = await pool.execute(
+      'SELECT id, server_id, code, created_by, created_at FROM server_invites WHERE server_id = ? ORDER BY created_at DESC LIMIT 50',
+      [server_id]
+    )
+    const invites = rows.map((r) => ({
+      ...r,
+      created_at: r.created_at?.toISOString?.() ?? r.created_at,
+    }))
+    res.json(invites)
+  } catch (err) {
+    console.error('List invites error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
 router.get('/code/:code', async (req, res) => {
   try {
     const [rows] = await pool.execute(

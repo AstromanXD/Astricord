@@ -6,6 +6,27 @@ import { authMiddleware } from '../middleware/auth.js'
 const router = Router()
 router.use(authMiddleware)
 
+router.get('/user/:userId/session', async (req, res) => {
+  try {
+    const { userId } = req.params
+    if (!userId) return res.status(400).json({ error: 'userId erforderlich' })
+
+    const [rows] = await pool.execute(
+      `SELECT vs.channel_id, c.name as channel_name
+       FROM voice_sessions vs
+       JOIN channels c ON c.id = vs.channel_id
+       WHERE vs.user_id = ?
+       LIMIT 1`,
+      [userId]
+    )
+    if (!rows.length) return res.json(null)
+    res.json({ channel_id: rows[0].channel_id, channel_name: rows[0].channel_name })
+  } catch (err) {
+    console.error('Voice user session error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
 router.get('/sessions', async (req, res) => {
   try {
     const { channelIds } = req.query

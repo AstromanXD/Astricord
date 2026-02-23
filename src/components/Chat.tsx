@@ -5,12 +5,13 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Channel, Message, Server } from '../lib/supabase'
 import type { Profile } from '../lib/supabase'
-import { api, useBackend, useBackendRealtime, messages, getProfilesByIds, uploadFile as apiUploadFile } from '../lib/api'
+import { api, useBackend, useBackendRealtime, messages as messagesApi, getProfilesByIds, uploadFile as apiUploadFile } from '../lib/api'
 import { InviteToServerModal } from './InviteToServerModal'
 import { Message as MessageComponent } from './Message'
 import { ThreadPanel } from './ThreadPanel'
 import { EmojiPicker } from './EmojiPicker'
 import { useAuth } from '../contexts/AuthContext'
+import { playSoundMessage } from '../lib/sounds'
 import { useServerEmojis } from '../hooks/useServerEmojis'
 import { useMemberRoleColors } from '../hooks/useMemberRoleColors'
 import { useMessageReactions } from '../hooks/useMessageReactions'
@@ -50,12 +51,18 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
   const [threadMessage, setThreadMessage] = useState<Message | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const sendingRef = useRef(false)
 
   const wsChannel = channel && (channel.type === 'text' || channel.type === 'forum') ? `messages:${channel.id}` : null
   useBackendRealtime(backend ? wsChannel : null, (event, payload) => {
     const msg = payload as Message
-    if (event === 'INSERT' && !msg.parent_message_id) setMessages((prev) => [...prev, msg])
-    else if (event === 'UPDATE') setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)))
+    if (event === 'INSERT' && !msg.parent_message_id) {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev
+        if (msg.user_id !== user?.id) playSoundMessage()
+        return [...prev, msg]
+      })
+    } else if (event === 'UPDATE') setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)))
     else if (event === 'DELETE') setMessages((prev) => prev.filter((m) => m.id !== (payload as { id: string }).id))
   })
 
@@ -66,7 +73,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     }
 
     if (backend) {
-      messages.getByChannel(channel.id).then((data) => {
+      messagesApi.getByChannel(channel.id).then((data) => {
         setMessages(data ?? [])
         setHasMore((data?.length ?? 0) >= 50)
       })
@@ -100,7 +107,13 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `channel_id=eq.${channel.id}` },
         (payload) => {
           const msg = payload.new as Message
-          if (!msg.parent_message_id) setMessages((prev) => [...prev, msg])
+          if (!msg.parent_message_id) {
+            setMessages((prev) => {
+              if (prev.some((m) => m.id === msg.id)) return prev
+              if (msg.user_id !== user?.id) playSoundMessage()
+              return [...prev, msg]
+            })
+          }
         }
       )
       .on(
@@ -259,29 +272,35 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
 
   const sendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault()
-    if (!channel || !user || (!input.trim() && attachments.length === 0) || sending) return
+    if (!channel || !user || (!input.trim() && attachments.length === 0) || sendingRef.current) return
 
     const content = input.trim() || ' '
     setInput('')
     const atts = [...attachments]
     setAttachments([])
     setShowEmojiPicker(false)
+    sendingRef.current = true
     setSending(true)
 
     if (backend) {
       try {
-        const newMessage = await messages.create({
+        const newMessage = await messagesApi.create({
           channel_id: channel.id,
           content,
           attachments: atts.length ? atts : undefined,
         })
         if (newMessage) {
-          setMessages((prev) => [...prev, { ...newMessage, attachments: atts }])
+          setMessages((prev) =>
+            prev.some((m) => m.id === newMessage.id) ? prev : [...prev, { ...newMessage, attachments: atts }]
+          )
           setProfiles((prev) =>
             profile && !prev[user.id] ? { ...prev, [user.id]: profile } : prev
           )
         }
-      } catch (_) {}
+      } catch (_) {
+        setInput(content)
+        setAttachments(atts)
+      }
     } else {
       const { data: newMessage } = await supabase
         .from('messages')
@@ -295,7 +314,8 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
         .single()
 
       if (newMessage) {
-        setMessages((prev) => [...prev, { ...(newMessage as Message), attachments: atts }])
+        const msg = { ...(newMessage as Message), attachments: atts }
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
         setProfiles((prev) =>
           profile && !prev[user.id] ? { ...prev, [user.id]: profile } : prev
         )
@@ -303,6 +323,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     }
 
     setSending(false)
+    sendingRef.current = false
   }
 
   const filteredMessages = searchQuery.trim()
@@ -319,7 +340,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     if (msg.user_id !== user?.id) return
     if (backend) {
       try {
-        await messages.update(msg.id, { is_pinned: !msg.is_pinned })
+        await messagesApi.update(msg.id, { is_pinned: !msg.is_pinned })
         setMessages((prev) =>
           prev.map((m) => (m.id === msg.id ? { ...m, is_pinned: !m.is_pinned } : m))
         )
@@ -339,7 +360,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     if (msg.user_id !== user?.id) return
     if (backend) {
       try {
-        await messages.update(msg.id, { content: newContent })
+        await messagesApi.update(msg.id, { content: newContent })
         setMessages((prev) =>
           prev.map((m) => (m.id === msg.id ? { ...m, content: newContent, edited_at: new Date().toISOString() } : m))
         )
@@ -359,7 +380,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     if (msg.user_id !== user?.id) return
     if (backend) {
       try {
-        await messages.delete(msg.id)
+        await messagesApi.delete(msg.id)
         setMessages((prev) => prev.filter((m) => m.id !== msg.id))
       } catch (_) {}
     } else {
@@ -374,7 +395,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     const oldest = messages[0]
     if (backend) {
       try {
-        const data = await messages.getByChannel(channel.id, 50, oldest.created_at)
+        const data = await messagesApi.getByChannel(channel.id, 50, oldest.created_at)
         const ordered = (data ?? []).reverse()
         setMessages((prev) => [...ordered, ...prev])
         setHasMore((data?.length ?? 0) >= 50)
@@ -685,7 +706,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
               />
             )}
           </div>
-          <button type="submit" className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--accent)] hover:text-[var(--accent-hover)]" title="Senden">
+          <button type="submit" disabled={sending} className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--accent)] hover:text-[var(--accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed" title="Senden">
             <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
           </button>
         </div>

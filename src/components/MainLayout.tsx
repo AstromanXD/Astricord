@@ -2,7 +2,7 @@
  * MainLayout - Discord-ähnliches Layout
  * [ServerList | ChannelList] + UserBar unten (spannt über beide) | Chat | MemberList
  */
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useBackend, invites, servers, dm } from '../lib/api'
 import { FRIENDS_ID } from './ServerList'
@@ -26,6 +26,7 @@ export function MainLayout() {
   const backend = useBackend()
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null)
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null)
+  const lastTextChannelByServer = useRef<Record<string, Channel>>({})
   const [selectedDmId, setSelectedDmId] = useState<string | null>(null)
   const [selectedDmUser, setSelectedDmUser] = useState<Profile | null>(null)
   const [serverSettingsServer, setServerSettingsServer] = useState<Server | null>(null)
@@ -209,10 +210,16 @@ export function MainLayout() {
               <ChannelList
                 serverId={selectedServerId}
                 selectedChannelId={selectedChannel?.id ?? null}
+                onJoinVoice={joinVoice}
+                isInVoice={isInVoice}
+                currentVoiceChannelId={currentChannelId}
                 onSelectChannel={(ch) => {
                   setSelectedChannel(ch ?? null)
                   setSelectedDmId(null)
                   setSelectedDmUser(null)
+                  if (ch && (ch.type === 'text' || ch.type === 'forum')) {
+                    lastTextChannelByServer.current[ch.server_id] = ch
+                  }
                 }}
                 speakingUserIds={speakingUserIds}
               />
@@ -245,7 +252,13 @@ export function MainLayout() {
             <DmChat conversationId={selectedDmId} otherUser={selectedDmUser} />
           ) : (
             <Chat
-              channel={selectedChannel}
+              channel={
+                selectedChannel?.type === 'text' || selectedChannel?.type === 'forum'
+                  ? selectedChannel
+                  : selectedChannel?.type === 'voice' && selectedServerId
+                    ? lastTextChannelByServer.current[selectedServerId] ?? null
+                    : selectedChannel
+              }
               serverId={selectedServerId}
               onToggleMembers={() => setShowMemberList((p) => !p)}
               onOpenEmojiSettings={async (serverId) => {

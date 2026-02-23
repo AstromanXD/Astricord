@@ -1,10 +1,11 @@
 /**
- * PresenceContext - Online-Status (Supabase Realtime Presence)
- * User ist online wenn eingeloggt und App offen
+ * PresenceContext - Online-Status
+ * Supabase Realtime Presence ODER Backend WebSocket
  */
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, useRef, type ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from './AuthContext'
+import { createWebSocket, useBackend } from '../lib/api'
 
 const PRESENCE_CHANNEL = 'presence:global'
 
@@ -16,12 +17,42 @@ const PresenceContext = createContext<PresenceContextType | undefined>(undefined
 
 export function PresenceProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
+  const backend = useBackend()
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set())
+  const onlineRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     if (!user) {
       setOnlineUserIds(new Set())
+      onlineRef.current = new Set()
       return
+    }
+
+    if (backend) {
+      onlineRef.current = new Set([user.id])
+      setOnlineUserIds(onlineRef.current)
+      const ws = createWebSocket(PRESENCE_CHANNEL)
+      const handler = (e: MessageEvent) => {
+        try {
+          const { event, payload } = JSON.parse(e.data as string)
+          if (event === 'PRESENCE_JOIN' && payload?.userId) {
+            onlineRef.current = new Set(onlineRef.current).add(payload.userId)
+            setOnlineUserIds(onlineRef.current)
+          } else if (event === 'PRESENCE_LEAVE' && payload?.userId) {
+            onlineRef.current = new Set(onlineRef.current)
+            onlineRef.current.delete(payload.userId)
+            setOnlineUserIds(onlineRef.current)
+          }
+        } catch (_) {}
+      }
+      ws.addEventListener('message', handler)
+      return () => {
+        ws.removeEventListener('message', handler)
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'unsubscribe', channel: PRESENCE_CHANNEL }))
+        }
+        ws.close()
+      }
     }
 
     const channel = supabase.channel(PRESENCE_CHANNEL, {
@@ -52,7 +83,7 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [user?.id])
+  }, [user?.id, backend])
 
   return (
     <PresenceContext.Provider value={{ onlineUserIds }}>

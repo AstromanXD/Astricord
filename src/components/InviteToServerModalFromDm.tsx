@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import type { Server, Channel } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { InviteToServerModal } from './InviteToServerModal'
+import { useBackend, servers, channels } from '../lib/api'
 
 interface InviteToServerModalFromDmProps {
   onClose: () => void
@@ -14,7 +15,8 @@ interface InviteToServerModalFromDmProps {
 
 export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToServerModalFromDmProps) {
   const { user } = useAuth()
-  const [servers, setServers] = useState<Server[]>([])
+  const backend = useBackend()
+  const [serversList, setServersList] = useState<Server[]>([])
   const [selectedServer, setSelectedServer] = useState<Server | null>(null)
   const [defaultChannel, setDefaultChannel] = useState<Channel | null>(null)
   const [loading, setLoading] = useState(true)
@@ -22,13 +24,23 @@ export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToSer
   useEffect(() => {
     if (!user) return
     const load = async () => {
+      if (backend) {
+        try {
+          const data = await servers.list()
+          setServersList(data ?? [])
+        } catch {
+          setServersList([])
+        }
+        setLoading(false)
+        return
+      }
       const { data: memberships } = await supabase
         .from('server_members')
         .select('server_id')
         .eq('user_id', user.id)
       const serverIds = (memberships ?? []).map((m) => m.server_id)
       if (serverIds.length === 0) {
-        setServers([])
+        setServersList([])
         setLoading(false)
         return
       }
@@ -37,14 +49,21 @@ export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToSer
         .select('*')
         .in('id', serverIds)
         .order('created_at')
-      setServers(data ?? [])
+      setServersList(data ?? [])
       setLoading(false)
     }
     load()
-  }, [user?.id])
+  }, [user?.id, backend])
 
   useEffect(() => {
     if (!selectedServer) return
+    if (backend) {
+      channels.list(selectedServer.id).then((data) => {
+        const textCh = (data ?? []).find((c) => c.type === 'text')
+        setDefaultChannel(textCh ?? null)
+      }).catch(() => setDefaultChannel(null))
+      return
+    }
     supabase
       .from('channels')
       .select('*')
@@ -54,7 +73,7 @@ export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToSer
       .limit(1)
       .maybeSingle()
       .then(({ data }) => setDefaultChannel(data))
-  }, [selectedServer?.id])
+  }, [selectedServer?.id, backend])
 
   if (selectedServer) {
     return (
@@ -93,7 +112,7 @@ export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToSer
             </div>
           ) : (
             <div className="space-y-1">
-              {servers.map((server) => (
+              {serversList.map((server) => (
                 <button
                   key={server.id}
                   type="button"

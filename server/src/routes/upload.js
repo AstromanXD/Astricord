@@ -28,6 +28,13 @@ const upload = multer({
 const router = Router()
 router.use(authMiddleware)
 
+router.post('/server-emoji', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Datei erforderlich' })
+  const base = (process.env.API_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '')
+  const url = `${base}/uploads/${req.file.filename}`
+  res.json({ url })
+})
+
 router.post('/message-attachment', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Datei erforderlich' })
   const base = (process.env.API_URL || `http://localhost:${process.env.PORT || 3001}`).replace(/\/$/, '')

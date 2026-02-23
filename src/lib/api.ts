@@ -118,6 +118,13 @@ export function createWebSocket(channel: string): WebSocket {
   return ws
 }
 
+/** WebSocket-Broadcast senden (für Voice-Signaling etc.) */
+export function sendBroadcast(ws: WebSocket | null, channel: string, event: string, payload: unknown) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'broadcast', channel, event, payload }))
+  }
+}
+
 /** WebSocket-Realtime für Backend: Nachrichten-Events empfangen */
 export function useBackendRealtime(
   channelName: string | null,
@@ -247,6 +254,26 @@ export const servers = {
     }),
   getRoleColors: (id: string, userIds: string[]) =>
     userIds.length ? api<Record<string, string>>(`/api/servers/${id}/role-colors?userIds=${userIds.join(',')}`).catch(() => ({})) : Promise.resolve({}),
+  getRoles: (id: string) =>
+    api<{ id: string; server_id: string; name: string; color: string; position: number; permissions?: number }[]>(
+      `/api/servers/${id}/roles`
+    ),
+  createRole: (serverId: string, data: { name: string; color?: string; position?: number }) =>
+    api<{ id: string; server_id: string; name: string; color: string; position: number }>(
+      `/api/servers/${serverId}/roles`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  updateRole: (serverId: string, roleId: string, data: { name?: string; color?: string; position?: number; permissions?: number }) =>
+    api<{ id: string; server_id: string; name: string; color: string; position: number }>(
+      `/api/servers/${serverId}/roles/${roleId}`,
+      { method: 'PATCH', body: JSON.stringify(data) }
+    ),
+  deleteRole: (serverId: string, roleId: string) =>
+    api(`/api/servers/${serverId}/roles/${roleId}`, { method: 'DELETE' }),
+  getAuditLog: (id: string) =>
+    api<{ id: string; server_id: string; user_id: string; action: string; target_type: string | null; target_id: string | null; details: Record<string, unknown>; created_at: string }[]>(
+      `/api/servers/${id}/audit-log`
+    ),
 }
 
 export interface ApiServer {
@@ -310,8 +337,12 @@ export const dm = {
 
 // Invites
 export const invites = {
+  list: (server_id: string) =>
+    api<{ id: string; server_id: string; code: string; created_by: string | null; created_at: string }[]>(
+      `/api/invites?server_id=${server_id}`
+    ),
   create: (server_id: string) =>
-    api<{ id: string; code: string }>('/api/invites', {
+    api<{ id: string; server_id: string; code: string; created_by: string; created_at: string }>('/api/invites', {
       method: 'POST',
       body: JSON.stringify({ server_id }),
     }),
@@ -371,6 +402,23 @@ export async function uploadFile(file: File): Promise<string | null> {
   formData.append('file', file)
   try {
     const res = await fetchWithTimeout(`${API_URL}/api/upload/message-attachment`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}` },
+      body: formData,
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.url ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function uploadServerEmoji(file: File): Promise<string | null> {
+  const formData = new FormData()
+  formData.append('file', file)
+  try {
+    const res = await fetchWithTimeout(`${API_URL}/api/upload/server-emoji`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${getToken()}` },
       body: formData,

@@ -2,7 +2,7 @@
  * MemberList - Rechte Sidebar mit Server-Mitgliedern & Rollen (Discord-ähnlich)
  * Rechtsklick-Kontextmenü wie bei Discord
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Profile, ServerRole } from '../lib/supabase'
 import { useBackend, servers, blockUser } from '../lib/api'
@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useServerPermissions } from '../hooks/useServerPermissions'
 import { MemberContextMenu } from './MemberContextMenu'
+import { MemberProfilePopover } from './MemberProfilePopover'
 
 interface MemberWithRoles {
   userId: string
@@ -34,6 +35,12 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
     x: number
     y: number
     member: MemberWithRoles
+  } | null>(null)
+  const [profilePopover, setProfilePopover] = useState<{
+    x: number
+    y: number
+    member: MemberWithRoles
+    anchorRef: React.RefObject<HTMLDivElement>
   } | null>(null)
 
   useEffect(() => {
@@ -110,6 +117,7 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
   const handleContextMenu = (e: React.MouseEvent, member: MemberWithRoles) => {
     e.preventDefault()
     e.stopPropagation()
+    setProfilePopover(null)
     setContextMenu({ x: e.clientX, y: e.clientY, member })
   }
 
@@ -229,11 +237,17 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
 
   const MemberRow = ({ m, color }: { m: MemberWithRoles; color?: string }) => {
     const isOnline = onlineUserIds.has(m.userId)
+    const rowRef = useRef<HTMLDivElement>(null)
     return (
     <div
+      ref={rowRef}
       key={m.userId}
+      onClick={(e) => {
+        setContextMenu(null)
+        setProfilePopover({ x: e.clientX, y: e.clientY, member: m, anchorRef: rowRef })
+      }}
       onContextMenu={(e) => handleContextMenu(e, m)}
-      className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--bg-modifier-hover)] group cursor-context-menu"
+      className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--bg-modifier-hover)] group cursor-pointer"
     >
       <div className="relative w-8 h-8 rounded-full overflow-hidden bg-[var(--bg-tertiary)] flex-shrink-0">
         <span
@@ -329,6 +343,18 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
         )}
       </div>
 
+      {profilePopover && (
+        <MemberProfilePopover
+          x={profilePopover.x}
+          y={profilePopover.y}
+          member={profilePopover.member}
+          isOnline={onlineUserIds.has(profilePopover.member.userId)}
+          isSelf={profilePopover.member.userId === user?.id}
+          onClose={() => setProfilePopover(null)}
+          onOpenDm={onOpenDm}
+          anchorRef={profilePopover.anchorRef}
+        />
+      )}
       {contextMenu && (
         <MemberContextMenu
           x={contextMenu.x}

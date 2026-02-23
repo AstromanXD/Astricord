@@ -1,10 +1,12 @@
 /**
  * useVoiceChat - WebRTC Voice/Video Chat
- * Peer-to-Peer Audio/Video über Supabase Realtime Signaling (Offer/Answer/ICE)
+ * Supabase Realtime ODER Backend WebSocket für Signaling
  */
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import type { RealtimeChannel } from '@supabase/supabase-js'
+import { useBackend, createWebSocket, sendBroadcast, voice } from '../lib/api'
+import { playSoundVoiceJoin, playSoundVoiceLeave, playSoundMute, playSoundUnmute } from '../lib/sounds'
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -41,6 +43,7 @@ const SPEAKING_THRESHOLD = 0.012
 const SILENCE_DELAY_MS = 400
 
 export function useVoiceChat(userId: string | undefined, username: string, avatarUrl?: string | null): UseVoiceChatReturn {
+  const backend = useBackend()
   const [isInVoice, setIsInVoice] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isVideoOn, setIsVideoOn] = useState(false)
@@ -55,7 +58,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const currentChannelIdRef = useRef<string | null>(null)
   const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
-  const channelRef = useRef<RealtimeChannel | null>(null)
+  const channelRef = useRef<RealtimeChannel | { send: (m: { type: string; event: string; payload: unknown }) => void; unsubscribe: () => void } | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationRef = useRef<number | null>(null)
   const isSpeakingRef = useRef(false)
@@ -96,7 +99,8 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
 
       pc.onicecandidate = (e) => {
         if (e.candidate && channelRef.current) {
-          channelRef.current.send({
+          const ch = channelRef.current as { send: (m: { type: string; event: string; payload: unknown }) => void }
+          ch.send({
             type: 'broadcast',
             event: 'webrtc-ice',
             payload: { fromUserId: userId, toUserId: remoteUserId, candidate: e.candidate },
@@ -136,6 +140,12 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         analyserRef.current = analyser
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount)
+        const chName = `voice:${channelId}`
+        const doSend = (event: string, payload: unknown) => {
+          const ch = channelRef.current
+          if (ch && 'send' in ch) ch.send({ type: 'broadcast', event, payload })
+          else if (ch && typeof (ch as RealtimeChannel).send === 'function') (ch as RealtimeChannel).send({ type: 'broadcast', event, payload })
+        }
         const checkSpeaking = () => {
           if (!analyserRef.current || !localStreamRef.current || !channelRef.current || !userId) return
           analyserRef.current.getByteFrequencyData(dataArray)
@@ -153,7 +163,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
                   next.delete(userId!)
                   return next
                 })
-                channelRef.current?.send({ type: 'broadcast', event: 'voice-stopped', payload: { userId } })
+                doSend('voice-stopped', { userId })
               }, SILENCE_DELAY_MS)
             }
           } else {
@@ -164,22 +174,128 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
             if (!isSpeakingRef.current) {
               isSpeakingRef.current = true
               setSpeakingUserIds((prev) => new Set(prev).add(userId!))
-              channelRef.current?.send({ type: 'broadcast', event: 'voice-speaking', payload: { userId } })
+              doSend('voice-speaking', { userId })
             }
           }
           animationRef.current = requestAnimationFrame(checkSpeaking)
         }
         checkSpeaking()
 
-        await supabase.from('voice_sessions').upsert(
-          { channel_id: channelId, user_id: userId, is_muted: false, has_video: false, is_screen_sharing: false },
-          { onConflict: 'channel_id,user_id' }
-        )
+        if (backend) {
+          await voice.join(channelId)
+        } else {
+          await supabase.from('voice_sessions').upsert(
+            { channel_id: channelId, user_id: userId, is_muted: false, has_video: false, is_screen_sharing: false },
+            { onConflict: 'channel_id,user_id' }
+          )
+        }
 
         currentChannelIdRef.current = channelId
         setCurrentChannelId(channelId)
         setIsInVoice(true)
         setIsMuted(false)
+        playSoundVoiceJoin()
+
+        if (backend) {
+          const ws = createWebSocket(chName)
+          const backendChannel = {
+            send: (m: { type: string; event: string; payload: unknown }) => {
+              if (m.type === 'broadcast') sendBroadcast(ws, chName, m.event, m.payload)
+            },
+            unsubscribe: () => {
+              if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'unsubscribe', channel: chName }))
+              ws.close()
+            },
+          }
+          channelRef.current = backendChannel
+
+          const handleMsg = (e: MessageEvent) => {
+            try {
+              const { event, payload } = JSON.parse(e.data as string)
+              if (!event || payload === undefined) return
+              if (event === 'voice-join' && payload.userId !== userId) {
+                setVoiceUsers((prev) => {
+                  if (prev.some((u) => u.userId === payload.userId)) return prev
+                  return [...prev, { ...payload, hasVideo: payload.hasVideo ?? false, isScreenSharing: payload.isScreenSharing ?? false }]
+                })
+              } else if (event === 'voice-video-update') {
+                setVoiceUsers((prev) => prev.map((u) => (u.userId === payload.userId ? { ...u, hasVideo: payload.hasVideo } : u)))
+              } else if (event === 'voice-screen-update') {
+                setVoiceUsers((prev) => prev.map((u) => (u.userId === payload.userId ? { ...u, isScreenSharing: payload.isScreenSharing } : u)))
+              } else if (event === 'voice-leave') {
+                setVoiceUsers((prev) => prev.filter((u) => u.userId !== payload.userId))
+                setSpeakingUserIds((prev) => { const n = new Set(prev); n.delete(payload.userId); return n })
+                peerConnectionsRef.current.get(payload.userId)?.close()
+                peerConnectionsRef.current.delete(payload.userId)
+                pendingIceRef.current.delete(payload.userId)
+                removeRemoteStream(payload.userId)
+              } else if (event === 'voice-speaking' && payload.userId !== userId) {
+                setSpeakingUserIds((prev) => new Set(prev).add(payload.userId))
+              } else if (event === 'voice-stopped') {
+                setSpeakingUserIds((prev) => { const n = new Set(prev); n.delete(payload.userId); return n })
+              } else if (event === 'webrtc-offer' && payload.toUserId === userId) {
+                createPeerConnection(payload.fromUserId)
+                const pc = peerConnectionsRef.current.get(payload.fromUserId)
+                if (!pc) return
+                pc.setRemoteDescription(new RTCSessionDescription(payload.sdp)).then(() => pc.createAnswer())
+                  .then((answer) => { pc.setLocalDescription(answer); return answer })
+                  .then((answer) => backendChannel.send({ type: 'broadcast', event: 'webrtc-answer', payload: { fromUserId: userId, toUserId: payload.fromUserId, sdp: answer } }))
+                  .then(() => { const pending = pendingIceRef.current.get(payload.fromUserId) ?? []; pending.forEach((c) => pc.addIceCandidate(new RTCIceCandidate(c))); pendingIceRef.current.set(payload.fromUserId, []) })
+                  .catch((err) => console.error('Handle offer failed:', err))
+              } else if (event === 'webrtc-answer' && payload.toUserId === userId) {
+                const pc = peerConnectionsRef.current.get(payload.fromUserId)
+                if (!pc) return
+                pc.setRemoteDescription(new RTCSessionDescription(payload.sdp)).then(() => {
+                  const pending = pendingIceRef.current.get(payload.fromUserId) ?? []
+                  pending.forEach((c) => pc.addIceCandidate(new RTCIceCandidate(c)))
+                  pendingIceRef.current.set(payload.fromUserId, [])
+                }).catch((err) => console.error('Handle answer failed:', err))
+              } else if (event === 'webrtc-ice' && payload.toUserId === userId) {
+                const pc = peerConnectionsRef.current.get(payload.fromUserId)
+                if (pc?.remoteDescription) {
+                  pc.addIceCandidate(new RTCIceCandidate(payload.candidate)).catch((err) => console.error('Add ICE failed:', err))
+                } else {
+                  const pending = pendingIceRef.current.get(payload.fromUserId) ?? []
+                  pending.push(payload.candidate)
+                  pendingIceRef.current.set(payload.fromUserId, pending)
+                }
+              }
+            } catch (_) {}
+          }
+          ws.addEventListener('message', handleMsg)
+
+          await new Promise<void>((resolve) => {
+            if (ws.readyState === WebSocket.OPEN) resolve()
+            else ws.addEventListener('open', () => resolve(), { once: true })
+          })
+
+          const localUser: VoiceUser = { userId, username, avatarUrl: avatarUrl ?? null, isMuted: false, hasVideo: false, isScreenSharing: false }
+          backendChannel.send({ type: 'broadcast', event: 'voice-join', payload: { userId, username, avatarUrl: avatarUrl ?? null, isMuted: false, hasVideo: false, isScreenSharing: false } })
+
+          const sessionsData = await voice.getSessions([channelId])
+          const sessions = sessionsData?.[channelId] ?? []
+          const existingUsers: VoiceUser[] = sessions
+            .filter((s: { userId: string }) => s.userId !== userId)
+            .map((s: { userId: string; username: string; avatarUrl: string | null; isMuted: boolean; hasVideo?: boolean; isScreenSharing?: boolean }) => ({
+              userId: s.userId,
+              username: s.username ?? 'Unbekannt',
+              avatarUrl: s.avatarUrl ?? null,
+              isMuted: s.isMuted,
+              hasVideo: s.hasVideo ?? false,
+              isScreenSharing: s.isScreenSharing ?? false,
+            }))
+          setVoiceUsers([localUser, ...existingUsers])
+          for (const u of existingUsers) {
+            createPeerConnection(u.userId)
+            const pc = peerConnectionsRef.current.get(u.userId)
+            if (pc?.signalingState === 'stable') {
+              pc.createOffer().then((offer) => pc.setLocalDescription(offer))
+                .then(() => backendChannel.send({ type: 'broadcast', event: 'webrtc-offer', payload: { fromUserId: userId, toUserId: u.userId, sdp: (pc as RTCPeerConnection & { localDescription?: RTCSessionDescription }).localDescription } }))
+                .catch((err) => console.error('Create offer failed:', err))
+            }
+          }
+          return
+        }
 
         const channel = supabase.channel(`voice:${channelId}`)
         channelRef.current = channel
@@ -341,7 +457,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         console.error('Voice join failed:', err)
       }
     },
-    [userId, username, avatarUrl, createPeerConnection, removeRemoteStream]
+    [userId, username, avatarUrl, createPeerConnection, removeRemoteStream, backend]
   )
 
   const leaveVoice = useCallback(async () => {
@@ -359,15 +475,20 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     isSpeakingRef.current = false
     analyserRef.current = null
 
+    playSoundVoiceLeave()
     channelRef.current?.send({ type: 'broadcast', event: 'voice-leave', payload: { userId } })
-    channelRef.current?.unsubscribe()
+    channelRef.current?.unsubscribe?.()
     channelRef.current = null
 
-    await supabase
-      .from('voice_sessions')
-      .delete()
-      .eq('channel_id', channelId)
-      .eq('user_id', userId)
+    if (backend) {
+      await voice.leave(channelId)
+    } else {
+      await supabase
+        .from('voice_sessions')
+        .delete()
+        .eq('channel_id', channelId)
+        .eq('user_id', userId)
+    }
 
     localStreamRef.current?.getTracks().forEach((t) => t.stop())
     localStreamRef.current = null
@@ -387,7 +508,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     setIsInVoice(false)
     setVoiceUsers([])
     setSpeakingUserIds(new Set())
-  }, [currentChannelId, userId])
+  }, [currentChannelId, userId, backend])
 
   useEffect(() => {
     currentChannelIdRef.current = currentChannelId
@@ -437,11 +558,15 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
       setLocalVideoStream(null)
       setIsVideoOn(false)
     }
-    await supabase
-      .from('voice_sessions')
-      .update({ has_video: newVideo })
-      .eq('channel_id', currentChannelId)
-      .eq('user_id', userId)
+    if (backend) {
+      await voice.video(currentChannelId, newVideo)
+    } else {
+      await supabase
+        .from('voice_sessions')
+        .update({ has_video: newVideo })
+        .eq('channel_id', currentChannelId)
+        .eq('user_id', userId)
+    }
     channelRef.current?.send({
       type: 'broadcast',
       event: 'voice-video-update',
@@ -450,7 +575,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     setVoiceUsers((prev) =>
       prev.map((u) => (u.userId === userId ? { ...u, hasVideo: newVideo } : u))
     )
-  }, [isVideoOn, renegotiateAll, currentChannelId, userId])
+  }, [isVideoOn, renegotiateAll, currentChannelId, userId, backend])
 
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((t) => t.stop())
@@ -463,12 +588,16 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     setIsScreenSharing(false)
     setIsVideoOn(false)
     if (currentChannelId && userId) {
-      supabase
-        .from('voice_sessions')
-        .update({ is_screen_sharing: false })
-        .eq('channel_id', currentChannelId)
-        .eq('user_id', userId)
-        .then(() => {})
+      if (backend) {
+        voice.screen(currentChannelId, false).catch(() => {})
+      } else {
+        supabase
+          .from('voice_sessions')
+          .update({ is_screen_sharing: false })
+          .eq('channel_id', currentChannelId)
+          .eq('user_id', userId)
+          .then(() => {})
+      }
       channelRef.current?.send({
         type: 'broadcast',
         event: 'voice-screen-update',
@@ -478,7 +607,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         prev.map((u) => (u.userId === userId ? { ...u, isScreenSharing: false } : u))
       )
     }
-  }, [currentChannelId, userId])
+  }, [currentChannelId, userId, backend])
 
   const toggleScreenShare = useCallback(async () => {
     if (isScreenSharing) {
@@ -503,11 +632,15 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         }
         await renegotiateAll()
         if (currentChannelId && userId) {
-          await supabase
-            .from('voice_sessions')
-            .update({ is_screen_sharing: true })
-            .eq('channel_id', currentChannelId)
-            .eq('user_id', userId)
+          if (backend) {
+            await voice.screen(currentChannelId, true)
+          } else {
+            await supabase
+              .from('voice_sessions')
+              .update({ is_screen_sharing: true })
+              .eq('channel_id', currentChannelId)
+              .eq('user_id', userId)
+          }
           channelRef.current?.send({
             type: 'broadcast',
             event: 'voice-screen-update',
@@ -526,13 +659,15 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         }
       }
     }
-  }, [isScreenSharing, stopScreenShare, renegotiateAll, currentChannelId, userId])
+  }, [isScreenSharing, stopScreenShare, renegotiateAll, currentChannelId, userId, backend])
 
   const toggleMute = useCallback(async () => {
     if (!currentChannelId || !userId) return
 
     const newMuted = !isMuted
     setIsMuted(newMuted)
+    if (newMuted) playSoundMute()
+    else playSoundUnmute()
 
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach((t) => {
@@ -540,12 +675,16 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
       })
     }
 
-    await supabase
-      .from('voice_sessions')
-      .update({ is_muted: newMuted })
-      .eq('channel_id', currentChannelId)
-      .eq('user_id', userId)
-  }, [currentChannelId, userId, isMuted])
+    if (backend) {
+      await voice.mute(currentChannelId, newMuted)
+    } else {
+      await supabase
+        .from('voice_sessions')
+        .update({ is_muted: newMuted })
+        .eq('channel_id', currentChannelId)
+        .eq('user_id', userId)
+    }
+  }, [currentChannelId, userId, isMuted, backend])
 
   return {
     isInVoice,

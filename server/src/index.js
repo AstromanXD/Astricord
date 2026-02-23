@@ -79,9 +79,15 @@ wss.on('connection', (ws, req) => {
       if (msg.type === 'subscribe' && msg.channel) {
         ws.subscriptions.add(msg.channel)
         subscribe(msg.channel, ws)
+        if (msg.channel === 'presence:global' && userId) {
+          broadcast('presence:global', 'PRESENCE_JOIN', { userId })
+        }
       }
       if (msg.type === 'unsubscribe' && msg.channel) {
         ws.subscriptions.delete(msg.channel)
+        if (msg.channel === 'presence:global' && userId) {
+          broadcast('presence:global', 'PRESENCE_LEAVE', { userId })
+        }
         unsubscribe(msg.channel, ws)
       }
       if (msg.type === 'broadcast' && msg.channel && msg.event !== undefined) {
@@ -91,6 +97,9 @@ wss.on('connection', (ws, req) => {
   })
 
   ws.on('close', () => {
+    if (userId) {
+      broadcast('presence:global', 'PRESENCE_LEAVE', { userId })
+    }
     ws.subscriptions.forEach((ch) => unsubscribe(ch, ws))
   })
 })

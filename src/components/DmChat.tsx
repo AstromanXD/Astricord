@@ -8,6 +8,7 @@ import { useBackend, useBackendRealtime, messages, getProfilesByIds } from '../l
 import { Message as MessageComponent } from './Message'
 import { InviteToServerModalFromDm } from './InviteToServerModalFromDm'
 import { useAuth } from '../contexts/AuthContext'
+import { playSoundMessage } from '../lib/sounds'
 
 interface DmChatProps {
   conversationId: string | null
@@ -27,7 +28,13 @@ export function DmChat({ conversationId, otherUser }: DmChatProps) {
   const wsChannel = conversationId ? `messages:dm:${conversationId}` : null
   useBackendRealtime(backend ? wsChannel : null, (event, payload) => {
     const msg = payload as Message
-    if (event === 'INSERT') setMessages((prev) => [...prev, msg])
+    if (event === 'INSERT') {
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev
+        if (msg.user_id !== user?.id) playSoundMessage()
+        return [...prev, msg]
+      })
+    }
     else if (event === 'UPDATE') setMessages((prev) => prev.map((m) => (m.id === msg.id ? msg : m)))
     else if (event === 'DELETE') setMessages((prev) => prev.filter((m) => m.id !== (payload as { id: string }).id))
   })
@@ -59,7 +66,12 @@ export function DmChat({ conversationId, otherUser }: DmChatProps) {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `dm_conversation_id=eq.${conversationId}` },
         (payload) => {
-          setMessages((prev) => [...prev, payload.new as Message])
+          const msg = payload.new as Message
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === msg.id)) return prev
+            if (msg.user_id !== user?.id) playSoundMessage()
+            return [...prev, msg]
+          })
         }
       )
       .on(

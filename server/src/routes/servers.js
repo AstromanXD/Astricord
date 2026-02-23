@@ -214,6 +214,11 @@ router.delete('/:id/members/:userId', async (req, res) => {
     if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
     if (req.params.userId === req.user.id) return res.status(400).json({ error: 'Kann sich nicht selbst kicken' })
 
+    const [[prof]] = await pool.execute('SELECT username FROM profiles WHERE id = ?', [req.params.userId])
+    await pool.execute(
+      'INSERT INTO audit_log (id, server_id, user_id, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [uuidv4(), req.params.id, req.user.id, 'member_kicked', 'user', req.params.userId, JSON.stringify({ username: prof?.username })]
+    )
     await pool.execute(
       'DELETE FROM server_member_roles WHERE server_id = ? AND user_id = ?',
       [req.params.id, req.params.userId]
@@ -235,6 +240,11 @@ router.post('/:id/members/:userId/ban', async (req, res) => {
     if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
     if (req.params.userId === req.user.id) return res.status(400).json({ error: 'Kann sich nicht selbst bannen' })
 
+    const [[prof]] = await pool.execute('SELECT username FROM profiles WHERE id = ?', [req.params.userId])
+    await pool.execute(
+      'INSERT INTO audit_log (id, server_id, user_id, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [uuidv4(), req.params.id, req.user.id, 'member_banned', 'user', req.params.userId, JSON.stringify({ username: prof?.username })]
+    )
     await pool.execute(
       'INSERT INTO server_bans (server_id, user_id, banned_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE banned_by = ?',
       [req.params.id, req.params.userId, req.user.id, req.user.id]
@@ -282,6 +292,117 @@ router.patch('/:id/members/:userId/roles', async (req, res) => {
     res.status(204).send()
   } catch (err) {
     console.error('Role toggle error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.get('/:id/roles', async (req, res) => {
+  try {
+    const [member] = await pool.execute(
+      'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
+      [req.params.id, req.user.id]
+    )
+    if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const [rows] = await pool.execute(
+      'SELECT id, server_id, name, color, position, permissions, created_at FROM server_roles WHERE server_id = ? ORDER BY position DESC',
+      [req.params.id]
+    )
+    const roles = rows.map((r) => ({
+      ...r,
+      created_at: r.created_at?.toISOString?.() ?? r.created_at,
+    }))
+    res.json(roles)
+  } catch (err) {
+    console.error('Roles error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.post('/:id/roles', async (req, res) => {
+  try {
+    const admin = await isAdmin(req.params.id, req.user.id)
+    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+
+    const { name, color, position } = req.body
+    if (!name?.trim()) return res.status(400).json({ error: 'name erforderlich' })
+
+    const [maxPos] = await pool.execute(
+      'SELECT COALESCE(MAX(position), 0) as m FROM server_roles WHERE server_id = ?',
+      [req.params.id]
+    )
+    const pos = position ?? (maxPos[0]?.m ?? 0) + 1
+    const roleId = uuidv4()
+    await pool.execute(
+      'INSERT INTO server_roles (id, server_id, name, color, position, permissions) VALUES (?, ?, ?, ?, ?, ?)',
+      [roleId, req.params.id, name.trim(), color || '#99aab5', pos, 3147264]
+    )
+    const [rows] = await pool.execute(
+      'SELECT id, server_id, name, color, position, permissions, created_at FROM server_roles WHERE id = ?',
+      [roleId]
+    )
+    const r = rows[0]
+    if (r?.created_at) r.created_at = r.created_at.toISOString?.() ?? r.created_at
+    res.status(201).json(r)
+  } catch (err) {
+    console.error('Create role error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.patch('/:id/roles/:roleId', async (req, res) => {
+  try {
+    const admin = await isAdmin(req.params.id, req.user.id)
+    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+
+    const [role] = await pool.execute(
+      'SELECT id FROM server_roles WHERE server_id = ? AND id = ?',
+      [req.params.id, req.params.roleId]
+    )
+    if (!role.length) return res.status(404).json({ error: 'Rolle nicht gefunden' })
+
+    const { name, color, position, permissions } = req.body
+    const updates = []
+    const values = []
+    if (name !== undefined) { updates.push('name = ?'); values.push(name) }
+    if (color !== undefined) { updates.push('color = ?'); values.push(color) }
+    if (position !== undefined) { updates.push('position = ?'); values.push(position) }
+    if (permissions !== undefined) { updates.push('permissions = ?'); values.push(permissions) }
+    if (!updates.length) return res.status(400).json({ error: 'Keine Änderungen' })
+
+    values.push(req.params.roleId)
+    await pool.execute(`UPDATE server_roles SET ${updates.join(', ')} WHERE id = ?`, values)
+    const [rows] = await pool.execute(
+      'SELECT id, server_id, name, color, position, permissions, created_at FROM server_roles WHERE id = ?',
+      [req.params.roleId]
+    )
+    const r = rows[0]
+    if (r?.created_at) r.created_at = r.created_at.toISOString?.() ?? r.created_at
+    res.json(r)
+  } catch (err) {
+    console.error('Update role error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.delete('/:id/roles/:roleId', async (req, res) => {
+  try {
+    const admin = await isAdmin(req.params.id, req.user.id)
+    if (!admin) return res.status(403).json({ error: 'Keine Berechtigung' })
+
+    const [role] = await pool.execute(
+      'SELECT name FROM server_roles WHERE server_id = ? AND id = ?',
+      [req.params.id, req.params.roleId]
+    )
+    if (!role.length) return res.status(404).json({ error: 'Rolle nicht gefunden' })
+    if (role[0].name === 'Admin' || role[0].name === 'Member') {
+      return res.status(400).json({ error: 'Admin- und Member-Rollen können nicht gelöscht werden' })
+    }
+
+    await pool.execute('DELETE FROM server_roles WHERE id = ?', [req.params.roleId])
+    res.status(204).send()
+  } catch (err) {
+    console.error('Delete role error:', err)
     res.status(500).json({ error: 'Fehler' })
   }
 })
@@ -347,6 +468,31 @@ router.patch('/:id', async (req, res) => {
     res.json(s)
   } catch (err) {
     console.error('Update server error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.get('/:id/audit-log', async (req, res) => {
+  try {
+    const [member] = await pool.execute(
+      'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
+      [req.params.id, req.user.id]
+    )
+    if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const [rows] = await pool.execute(
+      `SELECT id, server_id, user_id, action, target_type, target_id, details, created_at
+       FROM audit_log WHERE server_id = ? ORDER BY created_at DESC LIMIT 50`,
+      [req.params.id]
+    )
+    const log = rows.map((r) => ({
+      ...r,
+      details: r.details ? (typeof r.details === 'string' ? JSON.parse(r.details) : r.details) : {},
+      created_at: r.created_at?.toISOString?.() ?? r.created_at,
+    }))
+    res.json(log)
+  } catch (err) {
+    console.error('Audit log error:', err)
     res.status(500).json({ error: 'Fehler' })
   }
 })

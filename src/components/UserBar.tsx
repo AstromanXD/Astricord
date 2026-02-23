@@ -93,6 +93,12 @@ export function UserBar({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  useEffect(() => {
+    const handler = () => setSettingsOpen(true)
+    window.addEventListener('astricord:open-user-settings', handler)
+    return () => window.removeEventListener('astricord:open-user-settings', handler)
+  }, [])
+
   if (!user || !profile) return null
 
   const isVoiceChannel = selectedChannel?.type === 'voice'

@@ -261,7 +261,7 @@ export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps
           <button
             onClick={searchUsers}
             disabled={loading}
-            className="px-2 py-1.5 rounded bg-[var(--accent)] text-white text-sm hover:bg-[var(--accent-hover)] disabled:opacity-50"
+            className="px-2 py-1.5 rounded bg-[var(--accent)] text-white text-sm hover:bg-[var(--accent-hover)] disabled:opacity-50 cursor-pointer"
           >
             Suchen
           </button>
@@ -271,12 +271,12 @@ export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps
             {searchResults.map((p) => (
               <div
                 key={p.id}
-                className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-[var(--bg-hover)]"
+                className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-[var(--bg-hover)] cursor-pointer"
               >
                 <span className="text-sm text-[var(--text-primary)]">{p.username}</span>
                 <button
                   onClick={() => sendFriendRequest(p.id)}
-                  className="text-xs px-2 py-0.5 rounded bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
+                  className="text-xs px-2 py-0.5 rounded bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] cursor-pointer"
                 >
                   Hinzufügen
                 </button>
@@ -291,7 +291,7 @@ export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`px-2 py-1 rounded text-sm ${
+            className={`px-2 py-1 rounded text-sm cursor-pointer ${
               tab === t ? 'bg-[var(--bg-hover)] text-[var(--text-primary)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
             }`}
           >
@@ -310,7 +310,7 @@ export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps
               <button
                 key={dm.conversationId}
                 onClick={() => onSelectDm(dm.conversationId, dm.otherUser)}
-                className={`w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] ${
+                className={`w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] cursor-pointer ${
                   selectedDmId === dm.conversationId ? 'bg-[var(--bg-hover)]' : ''
                 }`}
               >
@@ -339,7 +339,7 @@ export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps
                     created_at: new Date().toISOString(),
                   })
                 }
-                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)]"
+                className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[var(--bg-hover)] cursor-pointer"
               >
                 <div className="w-8 h-8 rounded-full bg-[var(--bg-tertiary)] flex items-center justify-center text-[var(--text-muted)] text-sm">
                   {f.avatarUrl ? (
@@ -363,12 +363,12 @@ export function FriendsSidebar({ selectedDmId, onSelectDm }: FriendsSidebarProps
                 {pendingIncoming.map((f) => (
                   <div
                     key={f.id}
-                    className="flex items-center justify-between px-3 py-2 hover:bg-[var(--bg-hover)]"
+                    className="flex items-center justify-between px-3 py-2 hover:bg-[var(--bg-hover)] cursor-pointer"
                   >
                     <span className="text-sm text-[var(--text-primary)]">{f.username}</span>
                     <button
                       onClick={() => acceptFriendRequest(f.id)}
-                      className="text-xs px-2 py-0.5 rounded bg-[var(--accent)] text-white"
+                      className="text-xs px-2 py-0.5 rounded bg-[var(--accent)] text-white cursor-pointer"
                     >
                       Annehmen
                     </button>

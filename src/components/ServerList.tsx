@@ -131,7 +131,7 @@ export function ServerList({ selectedServerId, onSelectServer, onOpenServerSetti
       <button
         onClick={onClick}
         onContextMenu={onContextMenu}
-        className={`w-12 h-12 flex items-center justify-center text-lg font-bold transition-all duration-200 ${
+        className={`w-12 h-12 flex items-center justify-center text-lg font-bold transition-all duration-200 cursor-pointer ${
           selected
             ? 'rounded-xl bg-[var(--accent)] text-white'
             : 'rounded-[24px] bg-[var(--bg-tertiary)] text-[var(--text-primary)] group-hover:rounded-xl group-hover:bg-[var(--accent)] group-hover:text-white'

@@ -12,6 +12,7 @@ import {
   setAllow,
 } from '../lib/permissions'
 import { useServerPermissions } from '../hooks/useServerPermissions'
+import { useBackend, servers, invites, emojis, uploadServerEmoji } from '../lib/api'
 
 const ROLE_PERMISSIONS = [
   CHANNEL_PERMISSIONS.VIEW_CHANNEL,
@@ -57,6 +58,7 @@ interface ServerSettingsModalProps {
 }
 
 export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: ServerSettingsModalProps) {
+  const backend = useBackend()
   const { isOwner } = useServerPermissions(server.id)
   const [tab, setTab] = useState<Tab>(initialTab ?? 'serverprofil')
 
@@ -84,18 +86,35 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([])
 
   const fetchRoles = async () => {
+    if (backend) {
+      try {
+        const data = await servers.getRoles(server.id)
+        setRoles(data ?? [])
+        if (!selectedRole && (data?.length ?? 0) > 0) setSelectedRole(data?.[0] ?? null)
+      } catch {
+        setRoles([])
+      }
+      return
+    }
     const { data } = await supabase
       .from('server_roles')
       .select('*')
       .eq('server_id', server.id)
       .order('position', { ascending: false })
     setRoles(data ?? [])
-    if (!selectedRole && (data?.length ?? 0) > 0) {
-      setSelectedRole(data?.[0] ?? null)
-    }
+    if (!selectedRole && (data?.length ?? 0) > 0) setSelectedRole(data?.[0] ?? null)
   }
 
   const fetchMemberCount = async () => {
+    if (backend) {
+      try {
+        const memberIds = await servers.getMembers(server.id)
+        setMemberCount(memberIds?.length ?? 0)
+      } catch {
+        setMemberCount(0)
+      }
+      return
+    }
     const { count } = await supabase
       .from('server_members')
       .select('*', { count: 'exact', head: true })
@@ -104,6 +123,15 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   }
 
   const fetchEmojis = async () => {
+    if (backend) {
+      try {
+        const data = await emojis.list(server.id)
+        setEmojis(data ?? [])
+      } catch {
+        setEmojis([])
+      }
+      return
+    }
     const { data } = await supabase
       .from('server_emojis')
       .select('*')
@@ -126,6 +154,15 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   }, [server.id])
 
   const fetchMembers = async () => {
+    if (backend) {
+      try {
+        const data = await servers.getMembersDetail(server.id)
+        setMembers((data?.members ?? []).map((m) => ({ profile: m.profile as Profile, roles: m.roles })))
+      } catch {
+        setMembers([])
+      }
+      return
+    }
     const [membersRes, memberRolesRes, rolesRes] = await Promise.all([
       supabase.from('server_members').select('user_id').eq('server_id', server.id),
       supabase.from('server_member_roles').select('user_id, role_id').eq('server_id', server.id),
@@ -157,11 +194,29 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   }
 
   const fetchInvites = async () => {
+    if (backend) {
+      try {
+        const data = await invites.list(server.id)
+        setInvites(data ?? [])
+      } catch {
+        setInvites([])
+      }
+      return
+    }
     const { data } = await supabase.from('server_invites').select('*').eq('server_id', server.id).order('created_at', { ascending: false })
     setInvites(data ?? [])
   }
 
   const fetchAuditLog = async () => {
+    if (backend) {
+      try {
+        const data = await servers.getAuditLog(server.id)
+        setAuditLog((data ?? []) as AuditLogEntry[])
+      } catch {
+        setAuditLog([])
+      }
+      return
+    }
     const { data } = await supabase
       .from('audit_log')
       .select('*')
@@ -178,6 +233,14 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   }, [tab, server.id])
 
   const createInvite = async () => {
+    if (backend) {
+      try {
+        const inv = await invites.create(server.id)
+        setInviteCode(`${window.location.origin}/#invite/${inv.code}`)
+        fetchInvites()
+      } catch (_) {}
+      return
+    }
     const code = crypto.randomUUID().slice(0, 8)
     const { data: { user } } = await supabase.auth.getUser()
     const { error: err } = await supabase.from('server_invites').insert({
@@ -199,6 +262,16 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   const deleteServer = async () => {
     if (deleteConfirm !== server.name) return
     setError(null)
+    if (backend) {
+      try {
+        await servers.delete(server.id)
+        onSaved()
+        onClose()
+      } catch (e) {
+        setError((e as Error).message || 'Server konnte nicht gelöscht werden.')
+      }
+      return
+    }
     const { error: err } = await supabase.from('servers').delete().eq('id', server.id)
     if (!err) {
       onSaved()
@@ -211,6 +284,21 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   const handleSaveProfile = async () => {
     setError(null)
     setLoading(true)
+    if (backend) {
+      try {
+        await servers.update(server.id, {
+          name: name.trim(),
+          icon_url: iconUrl.trim() || null,
+          description: description.trim() || null,
+          banner_color: bannerColor,
+        })
+        onSaved()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+      setLoading(false)
+      return
+    }
     const { error: err } = await supabase
       .from('servers')
       .update({
@@ -232,6 +320,18 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
     if (!newRoleName.trim()) return
     setError(null)
     setLoading(true)
+    if (backend) {
+      try {
+        await servers.createRole(server.id, { name: newRoleName.trim(), color: newRoleColor })
+        setNewRoleName('')
+        setNewRoleColor('#99aab5')
+        fetchRoles()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+      setLoading(false)
+      return
+    }
     const maxPos = Math.max(0, ...roles.map((r) => r.position))
     const { error: err } = await supabase.from('server_roles').insert({
       server_id: server.id,
@@ -252,6 +352,16 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
 
   const handleUpdateRole = async (role: ServerRole, updates: Partial<ServerRole>) => {
     setError(null)
+    if (backend) {
+      try {
+        await servers.updateRole(server.id, role.id, updates)
+        setSelectedRole((prev) => (prev?.id === role.id ? { ...prev, ...updates } : prev))
+        fetchRoles()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+      return
+    }
     const { error: err } = await supabase
       .from('server_roles')
       .update(updates)
@@ -279,6 +389,16 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
       return
     }
     setError(null)
+    if (backend) {
+      try {
+        await servers.deleteRole(server.id, role.id)
+        setSelectedRole(null)
+        fetchRoles()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+      return
+    }
     const { error: err } = await supabase.from('server_roles').delete().eq('id', role.id)
     if (err) setError(err.message)
     else {
@@ -293,6 +413,25 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
 
     setError(null)
     setEmojiUploading(true)
+
+    if (backend) {
+      for (const file of fileList) {
+        const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
+        if (!['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) continue
+        const emojiName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 32) || 'emoji'
+        const url = await uploadServerEmoji(file)
+        if (url) {
+          try {
+            await emojis.create(server.id, emojiName, url)
+          } catch (e) {
+            setError((e as Error).message)
+          }
+        }
+      }
+      setEmojiUploading(false)
+      fetchEmojis()
+      return
+    }
 
     for (const file of fileList) {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
@@ -327,6 +466,15 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
 
   const handleDeleteEmoji = async (emoji: ServerEmoji) => {
     setError(null)
+    if (backend) {
+      try {
+        await emojis.delete(emoji.id)
+        fetchEmojis()
+      } catch (e) {
+        setError((e as Error).message)
+      }
+      return
+    }
     const { error: err } = await supabase.from('server_emojis').delete().eq('id', emoji.id)
     if (err) setError(err.message)
     else fetchEmojis()
@@ -336,6 +484,14 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
     setIconUrl('')
     setError(null)
     setLoading(true)
+    if (backend) {
+      try {
+        await servers.update(server.id, { icon_url: null })
+        onSaved()
+      } catch (_) {}
+      setLoading(false)
+      return
+    }
     const { error: err } = await supabase
       .from('servers')
       .update({ icon_url: null })

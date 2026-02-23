@@ -47,8 +47,13 @@ router.get('/', async (req, res) => {
       if (!access) return res.status(403).json({ error: 'Kein Zugriff' })
 
       let sql = `SELECT id, channel_id, dm_conversation_id, user_id, content, attachments, is_pinned, edited_at, parent_message_id, created_at
-                 FROM messages WHERE channel_id = ? AND (parent_message_id IS NULL OR parent_message_id = ?)`
-      const params = [channelId, parentMessageId || null]
+                 FROM messages WHERE channel_id = ?`
+      const params = [channelId]
+      if (parentMessageId) {
+        sql += ' AND parent_message_id = ?'
+        params.push(parentMessageId)
+      }
+      /* Ohne parentMessageId: alle Nachrichten im Channel (inkl. Antworten) */
 
       if (before) {
         sql += ' AND created_at < ?'

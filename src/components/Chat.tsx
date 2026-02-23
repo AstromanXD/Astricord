@@ -49,6 +49,11 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteServer, setInviteServer] = useState<Server | null>(null)
   const [threadMessage, setThreadMessage] = useState<Message | null>(null)
+  const [replyToMessage, setReplyToMessage] = useState<Message | null>(null)
+  const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null)
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const reactionPickerButtonRef = useRef<HTMLButtonElement>(null)
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sendingRef = useRef(false)
@@ -56,7 +61,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
   const wsChannel = channel && (channel.type === 'text' || channel.type === 'forum') ? `messages:${channel.id}` : null
   useBackendRealtime(backend ? wsChannel : null, (event, payload) => {
     const msg = payload as Message
-    if (event === 'INSERT' && !msg.parent_message_id) {
+    if (event === 'INSERT') {
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev
         if (msg.user_id !== user?.id) playSoundMessage()
@@ -85,7 +90,6 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
         .from('messages')
         .select('*')
         .eq('channel_id', channel.id)
-        .is('parent_message_id', null)
         .order('created_at', { ascending: false })
         .limit(50)
       if (olderThan) q = q.lt('created_at', olderThan)
@@ -107,13 +111,11 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `channel_id=eq.${channel.id}` },
         (payload) => {
           const msg = payload.new as Message
-          if (!msg.parent_message_id) {
-            setMessages((prev) => {
-              if (prev.some((m) => m.id === msg.id)) return prev
-              if (msg.user_id !== user?.id) playSoundMessage()
-              return [...prev, msg]
-            })
-          }
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === msg.id)) return prev
+            if (msg.user_id !== user?.id) playSoundMessage()
+            return [...prev, msg]
+          })
         }
       )
       .on(
@@ -275,10 +277,13 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     if (!channel || !user || (!input.trim() && attachments.length === 0) || sendingRef.current) return
 
     const content = input.trim() || ' '
+    const parentId = replyToMessage?.id
     setInput('')
+    setReplyToMessage(null)
     const atts = [...attachments]
     setAttachments([])
     setShowEmojiPicker(false)
+    setReactionPickerMessageId(null)
     sendingRef.current = true
     setSending(true)
 
@@ -288,6 +293,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
           channel_id: channel.id,
           content,
           attachments: atts.length ? atts : undefined,
+          parent_message_id: parentId,
         })
         if (newMessage) {
           setMessages((prev) =>
@@ -309,6 +315,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
           user_id: user.id,
           content,
           attachments: atts.length ? atts : undefined,
+          parent_message_id: parentId ?? undefined,
         })
         .select()
         .single()
@@ -373,6 +380,15 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, content: newContent, edited_at: new Date().toISOString() } : m))
       )
+    }
+  }
+
+  const scrollToMessage = (messageId: string) => {
+    const el = messageRefs.current[messageId]
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedMessageId(messageId)
+      setTimeout(() => setHighlightedMessageId(null), 2000)
     }
   }
 
@@ -525,22 +541,41 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
               <p className="text-sm text-[var(--text-muted)]">Keine angehefteten Nachrichten</p>
             ) : (
               <div className="space-y-0">
-                {pinnedMessages.map((msg) => (
-                  <MessageComponent
-                    key={msg.id}
-                    message={msg}
-                    profile={profiles[msg.user_id] ?? null}
-                    isOwn={msg.user_id === user?.id}
-                    serverEmojis={serverEmojis}
-                    roleColor={memberRoleColors[msg.user_id]}
-                    onUnpin={() => togglePin(msg)}
-                    reactions={reactionsByMessage[msg.id]}
-                    onToggleReaction={(emoji) => toggleReaction(msg.id, emoji)}
-                    onEdit={(c) => handleEditMessage(msg, c)}
-                    onReply={() => setThreadMessage(msg)}
-                    onDelete={msg.user_id === user?.id ? () => handleDeleteMessage(msg) : undefined}
-                  />
-                ))}
+                {pinnedMessages.map((msg) => {
+                  const parentMsg = msg.parent_message_id ? messages.find((m) => m.id === msg.parent_message_id) : null
+                  const parentInfo = parentMsg
+                    ? {
+                        id: parentMsg.id,
+                        content: parentMsg.content ?? '',
+                        username: profiles[parentMsg.user_id]?.username ?? 'Unbekannt',
+                        avatarUrl: profiles[parentMsg.user_id]?.avatar_url ?? null,
+                      }
+                    : null
+                  return (
+                    <div key={msg.id} ref={(el) => { messageRefs.current[msg.id] = el }}>
+                      <MessageComponent
+                        message={msg}
+                        profile={profiles[msg.user_id] ?? null}
+                        isOwn={msg.user_id === user?.id}
+                        serverEmojis={serverEmojis}
+                        roleColor={memberRoleColors[msg.user_id]}
+                        parentMessage={parentInfo}
+                        onScrollToMessage={scrollToMessage}
+                        isHighlighted={highlightedMessageId === msg.id}
+                        onUnpin={() => togglePin(msg)}
+                        reactions={reactionsByMessage[msg.id]}
+                        onToggleReaction={(emoji) => toggleReaction(msg.id, emoji)}
+                        onEdit={(c) => handleEditMessage(msg, c)}
+                        onReply={() => setReplyToMessage(msg)}
+                        onOpenThread={() => setThreadMessage(msg)}
+                        onDelete={msg.user_id === user?.id ? () => handleDeleteMessage(msg) : undefined}
+                        reactionPickerActive={reactionPickerMessageId === msg.id}
+                        reactionPickerButtonRef={reactionPickerButtonRef}
+                        onOpenReactionPicker={() => setReactionPickerMessageId(msg.id)}
+                      />
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
@@ -562,23 +597,45 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                 </button>
               </div>
             )}
-            {filteredMessages.map((msg) => (
-              <MessageComponent
-                key={msg.id}
-                message={msg}
-                profile={profiles[msg.user_id] ?? null}
-                isOwn={msg.user_id === user?.id}
-                serverEmojis={serverEmojis}
-                roleColor={memberRoleColors[msg.user_id]}
-                onPin={() => togglePin(msg)}
-                onUnpin={() => togglePin(msg)}
-                reactions={reactionsByMessage[msg.id]}
-                onToggleReaction={(emoji) => toggleReaction(msg.id, emoji)}
-                onEdit={(c) => handleEditMessage(msg, c)}
-                onReply={() => setThreadMessage(msg)}
-                onDelete={msg.user_id === user?.id ? () => handleDeleteMessage(msg) : undefined}
-              />
-            ))}
+            {filteredMessages.map((msg) => {
+              const parentMsg = msg.parent_message_id ? messages.find((m) => m.id === msg.parent_message_id) : null
+              const parentInfo = parentMsg
+                ? {
+                    id: parentMsg.id,
+                    content: parentMsg.content ?? '',
+                    username: profiles[parentMsg.user_id]?.username ?? 'Unbekannt',
+                    avatarUrl: profiles[parentMsg.user_id]?.avatar_url ?? null,
+                  }
+                : null
+              return (
+                <div
+                  key={msg.id}
+                  ref={(el) => { messageRefs.current[msg.id] = el }}
+                >
+                  <MessageComponent
+                    message={msg}
+                    profile={profiles[msg.user_id] ?? null}
+                    isOwn={msg.user_id === user?.id}
+                    serverEmojis={serverEmojis}
+                    roleColor={memberRoleColors[msg.user_id]}
+                    parentMessage={parentInfo}
+                    onScrollToMessage={scrollToMessage}
+                    isHighlighted={highlightedMessageId === msg.id}
+                    onPin={() => togglePin(msg)}
+                    onUnpin={() => togglePin(msg)}
+                    reactions={reactionsByMessage[msg.id]}
+                    onToggleReaction={(emoji) => toggleReaction(msg.id, emoji)}
+                    onEdit={(c) => handleEditMessage(msg, c)}
+                    onReply={() => setReplyToMessage(msg)}
+                    onOpenThread={() => setThreadMessage(msg)}
+                    onDelete={msg.user_id === user?.id ? () => handleDeleteMessage(msg) : undefined}
+                    reactionPickerActive={reactionPickerMessageId === msg.id}
+                    reactionPickerButtonRef={reactionPickerButtonRef}
+                    onOpenReactionPicker={() => setReactionPickerMessageId(msg.id)}
+                  />
+                </div>
+              )
+            })}
           </>
         )}
       </div>
@@ -593,7 +650,44 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
         />
       )}
       </div>
+      {reactionPickerMessageId && (
+        <EmojiPicker
+          serverEmojis={serverEmojis}
+          serverName={serverName}
+          initialTab="emojis"
+          onSelect={(emoji) => {
+            toggleReaction(reactionPickerMessageId, emoji)
+            setReactionPickerMessageId(null)
+          }}
+          onSelectCustom={(name) => {
+            toggleReaction(reactionPickerMessageId, `:${name}:`)
+            setReactionPickerMessageId(null)
+          }}
+          onClose={() => setReactionPickerMessageId(null)}
+          onAddEmoji={
+            (channel?.server_id ?? serverId) && onOpenEmojiSettings
+              ? () => onOpenEmojiSettings(channel?.server_id ?? serverId!)
+              : undefined
+          }
+          anchorRef={reactionPickerButtonRef}
+        />
+      )}
       <form onSubmit={sendMessage} className="px-4 pb-4">
+        {replyToMessage && (
+          <div className="flex items-center justify-between px-4 py-2 bg-[var(--bg-tertiary)] border-b border-[var(--border)]">
+            <span className="text-sm text-[var(--text-muted)]">
+              {profiles[replyToMessage.user_id]?.username ?? 'Unbekannt'} antworten
+            </span>
+            <button
+              type="button"
+              onClick={() => setReplyToMessage(null)}
+              className="p-1 rounded hover:bg-[var(--bg-modifier-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              title="Abbrechen"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="flex gap-2 px-4 py-2 flex-wrap">
             {attachments.map((att, i) => (
@@ -664,7 +758,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                 sendMessage()
               }
             }}
-            placeholder={`Nachricht an #${channel.name}`}
+            placeholder={replyToMessage ? `Nachricht an @${profiles[replyToMessage.user_id]?.username ?? 'Unbekannt'}` : `Nachricht an #${channel.name}`}
             maxLength={2000}
             rows={1}
             className="flex-1 bg-transparent text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none text-[15px] resize-none min-h-[24px] max-h-[200px] py-1"

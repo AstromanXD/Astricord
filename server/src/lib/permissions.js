@@ -102,3 +102,42 @@ export async function getEffectivePermissions(pool, serverId, userId) {
   }
   return perms
 }
+
+/**
+ * Effektive Kanal-Berechtigungen (Server-Rechte + Channel-Overwrites)
+ */
+export async function getChannelPermissions(pool, channelId, userId) {
+  const [ch] = await pool.execute('SELECT server_id FROM channels WHERE id = ?', [channelId])
+  if (!ch.length) return 0
+  const serverId = ch[0].server_id
+
+  let perms = await getEffectivePermissions(pool, serverId, userId)
+  if (perms === 0) return 0
+
+  let overwrites = []
+  try {
+    const [ow] = await pool.execute(
+      `SELECT role_id, user_id, allow, deny FROM channel_permission_overwrites WHERE channel_id = ?`,
+      [channelId]
+    )
+    overwrites = ow
+  } catch {
+    // Tabelle existiert evtl. noch nicht (Migration nicht ausgeführt)
+  }
+
+  const [userRoles] = await pool.execute(
+    `SELECT role_id FROM server_member_roles WHERE server_id = ? AND user_id = ?`,
+    [serverId, userId]
+  )
+  const roleIds = new Set(userRoles.map((r) => r.role_id))
+
+  for (const ow of overwrites) {
+    let applies = false
+    if (ow.role_id && roleIds.has(ow.role_id)) applies = true
+    if (ow.user_id === userId) applies = true
+    if (applies) {
+      perms = Number((BigInt(perms) & ~BigInt(ow.deny)) | BigInt(ow.allow))
+    }
+  }
+  return perms
+}

@@ -3,9 +3,11 @@
  * Einklappbare Kategorien, Nutzer in Voice-Channels, Speaking-Indikator
  */
 import { useEffect, useState, useCallback } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Channel, Server } from '../lib/supabase'
-import { useBackend, channels as apiChannels, servers as apiServers } from '../lib/api'
+import type { ApiChannelCategory } from '../lib/api'
+
+type ChannelCategory = ApiChannelCategory
+import { channels as apiChannels, servers as apiServers } from '../lib/api'
 import { useServerPermissions } from '../hooks/useServerPermissions'
 import { useVoiceSessions } from '../hooks/useVoiceSessions'
 import { ChannelModal } from './ChannelModal'
@@ -216,40 +218,60 @@ function ChannelCategory({
 
 export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJoinVoice, isInVoice, currentVoiceChannelId, speakingUserIds = new Set() }: ChannelListProps) {
   const [channels, setChannels] = useState<Channel[]>([])
+  const [categories, setCategories] = useState<ChannelCategory[]>([])
   const [server, setServer] = useState<Server | null>(null)
-  const [textCollapsed, setTextCollapsed] = useState(false)
-  const [voiceCollapsed, setVoiceCollapsed] = useState(false)
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
   const [modalChannel, setModalChannel] = useState<Channel | null | 'create'>(null)
+  const [showCategoryPrompt, setShowCategoryPrompt] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState<Channel | null>(null)
   const [showServerSettings, setShowServerSettings] = useState(false)
   const [showServerDropdown, setShowServerDropdown] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<{ x: number; y: number } | null>(null)
 
-  const voiceChannels = channels.filter((c) => c.type === 'voice')
-  const voiceChannelIds = voiceChannels.map((c) => c.id)
+  const voiceChannelIds = channels.filter((c) => c.type === 'voice').map((c) => c.id)
   const voiceSessionsByChannel = useVoiceSessions(serverId, voiceChannelIds)
 
-  const backend = useBackend()
+  const toggleCategory = (id: string) => {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const groupChannelsByCategory = () => {
+    const byCat = new Map<string | null, Channel[]>()
+    byCat.set(null, [])
+    categories.forEach((c) => byCat.set(c.id, []))
+    channels.forEach((ch) => {
+      const list = byCat.get(ch.category_id ?? null) ?? []
+      list.push(ch)
+      byCat.set(ch.category_id ?? null, list)
+    })
+    byCat.forEach((list, catId) => {
+      list.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+    })
+    return byCat
+  }
+
   const { canManageServer, canManageChannels } = useServerPermissions(serverId)
 
   const fetchChannels = useCallback(async () => {
     if (!serverId) return
-    if (backend) {
-      try {
-        const data = await apiChannels.list(serverId)
-        setChannels(data ?? [])
-      } catch {
-        setChannels([])
-      }
-      return
+    try {
+      const [chData, catData] = await Promise.all([
+        apiChannels.list(serverId),
+        apiChannels.listCategories(serverId),
+      ])
+      setChannels(chData ?? [])
+      setCategories((catData ?? []) as ChannelCategory[])
+    } catch {
+      setChannels([])
+      setCategories([])
     }
-    const { data } = await supabase
-      .from('channels')
-      .select('*')
-      .eq('server_id', serverId)
-      .order('created_at')
-    setChannels(data ?? [])
-  }, [serverId, backend])
+  }, [serverId])
 
   useEffect(() => {
     if (!serverId) {
@@ -258,41 +280,39 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
       return
     }
     const fetchServer = async () => {
-      if (backend) {
-        try {
-          const data = await apiServers.get(serverId)
-          setServer(data as Server)
-        } catch {
-          setServer(null)
-        }
-      } else {
-        const { data } = await supabase.from('servers').select('*').eq('id', serverId).single()
-        setServer(data ?? null)
+      try {
+        const data = await apiServers.get(serverId)
+        setServer(data as Server)
+      } catch {
+        setServer(null)
       }
     }
     fetchServer()
     fetchChannels()
-  }, [serverId, fetchChannels, backend])
+  }, [serverId, fetchChannels])
 
-  const handleDeleteChannel = async (ch: Channel) => {
-    if (backend) {
-      try {
-        await apiChannels.delete(ch.id)
-        setDeleteConfirm(null)
-        fetchChannels()
-        onSelectChannel(null)
-      } catch (_) {}
-    } else {
-      const { error } = await supabase.from('channels').delete().eq('id', ch.id)
-      if (!error) {
-        setDeleteConfirm(null)
-        fetchChannels()
-        onSelectChannel(null)
-      }
-    }
+  const handleCreateCategory = async () => {
+    const name = newCategoryName.trim()
+    if (!serverId || !name) return
+    try {
+      await apiChannels.createCategory({ server_id: serverId, name })
+      fetchChannels()
+    } catch (_) {}
+    setShowCategoryPrompt(false)
+    setNewCategoryName('')
   }
 
-  const textChannels = channels.filter((c) => c.type === 'text')
+  const handleDeleteChannel = async (ch: Channel) => {
+    try {
+      await apiChannels.delete(ch.id)
+      setDeleteConfirm(null)
+      fetchChannels()
+      onSelectChannel(null)
+    } catch (_) {}
+  }
+
+  const channelsByCategory = groupChannelsByCategory()
+  const sortedCategories = [...categories].sort((a, b) => a.position - b.position)
 
   if (!serverId) {
     return (
@@ -346,56 +366,73 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
           onClose={() => setShowServerDropdown(false)}
           onServerSettings={() => setShowServerSettings(true)}
           onAddChannel={() => setModalChannel('create')}
+          onAddCategory={() => setShowCategoryPrompt(true)}
         />
       )}
       <div className="flex-1 overflow-y-auto hide-scrollbar py-2 min-h-0">
-        <ChannelCategory
-          title="Textkanäle"
-          icon={
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M5.88657 21C5.57547 21 5.3399 20.7189 5.39427 20.4126L6.00001 17H2.59511C2.28449 17 2.04905 16.7198 2.10259 16.4138L2.27759 15.4138C2.31946 15.1746 2.52722 15 2.77011 15H6.35001L7.41001 9H4.00511C3.69449 9 3.45905 8.71977 3.51259 8.41381L3.68759 7.41381C3.72946 7.17456 3.93722 7 4.18011 7H7.76001L8.39677 3.41262C8.45114 3.10635 8.68672 2.82527 8.99782 2.82527H9.60332C9.91442 2.82527 10.15 3.10635 10.1046 3.41262L9.47001 7H15.76L16.3968 3.41262C16.4511 3.10635 16.6867 2.82527 16.9978 2.82527H17.6033C17.9144 2.82527 18.15 3.10635 18.1046 3.41262L17.47 7H21.4049C21.7155 7 21.951 7.28023 21.8974 7.58619L21.7224 8.58619C21.6805 8.82544 21.4728 9 21.2299 9H17.65L16.59 15H19.9949C20.3055 15 20.541 15.2802 20.4874 15.5862L20.3124 16.5862C20.2705 16.8254 20.0628 17 19.8199 17H16.24L15.6033 20.5874C15.5489 20.8937 15.3133 21.1747 15.0022 21.1747H14.3967C14.0856 21.1747 13.85 20.8937 13.8954 20.5874L14.53 17H8.24001L7.60332 20.5874C7.54895 20.8937 7.31337 21.1747 7.00227 21.1747L6.39677 21L5.88657 21Z" />
-            </svg>
-          }
-          channels={textChannels}
-          selectedId={selectedChannelId}
-          onSelect={onSelectChannel}
-          onEdit={setModalChannel}
-          onDelete={setDeleteConfirm}
-          collapsed={textCollapsed}
-          onToggle={() => setTextCollapsed(!textCollapsed)}
-          canManageServer={canManageServer}
-          canManageChannels={canManageChannels}
-          onServerSettings={() => setShowServerSettings(true)}
-          onAddChannel={() => setModalChannel('create')}
-        />
-        <ChannelCategory
-          title="Sprachkanäle"
-          icon={
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-              <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-            </svg>
-          }
-          channels={voiceChannels}
-          selectedId={selectedChannelId}
-          onSelect={(ch) => {
-            onSelectChannel(ch)
-            if (onJoinVoice && (!isInVoice || currentVoiceChannelId !== ch.id)) {
-              onJoinVoice(ch.id)
+        {/* Ohne Kategorie */}
+        {(channelsByCategory.get(null)?.length ?? 0) > 0 && (
+          <ChannelCategory
+            title="Ohne Kategorie"
+            icon={
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z" />
+              </svg>
             }
-          }}
-          onEdit={setModalChannel}
-          onDelete={setDeleteConfirm}
-          collapsed={voiceCollapsed}
-          onToggle={() => setVoiceCollapsed(!voiceCollapsed)}
-          canManageServer={canManageServer}
-          canManageChannels={canManageChannels}
-          onServerSettings={() => setShowServerSettings(true)}
-          onAddChannel={() => setModalChannel('create')}
-          voiceSessionsByChannel={voiceSessionsByChannel}
-          speakingUserIds={speakingUserIds}
-        />
-        {textChannels.length === 0 && voiceChannels.length === 0 && (
+            channels={channelsByCategory.get(null) ?? []}
+            selectedId={selectedChannelId}
+            onSelect={(ch) => {
+              onSelectChannel(ch)
+              if (ch.type === 'voice' && onJoinVoice && (!isInVoice || currentVoiceChannelId !== ch.id)) {
+                onJoinVoice(ch.id)
+              }
+            }}
+            onEdit={setModalChannel}
+            onDelete={setDeleteConfirm}
+            collapsed={collapsedCategories.has('__none__')}
+            onToggle={() => toggleCategory('__none__')}
+            canManageServer={canManageServer}
+            canManageChannels={canManageChannels}
+            onServerSettings={() => setShowServerSettings(true)}
+            onAddChannel={() => setModalChannel('create')}
+            voiceSessionsByChannel={voiceSessionsByChannel}
+            speakingUserIds={speakingUserIds}
+          />
+        )}
+        {sortedCategories.map((cat) => {
+          const catChannels = channelsByCategory.get(cat.id) ?? []
+          if (catChannels.length === 0) return null
+          return (
+            <ChannelCategory
+              key={cat.id}
+              title={cat.name}
+              icon={
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M7 10l5 5 5-5z" />
+                </svg>
+              }
+              channels={catChannels}
+              selectedId={selectedChannelId}
+              onSelect={(ch) => {
+                onSelectChannel(ch)
+                if (ch.type === 'voice' && onJoinVoice && (!isInVoice || currentVoiceChannelId !== ch.id)) {
+                  onJoinVoice(ch.id)
+                }
+              }}
+              onEdit={setModalChannel}
+              onDelete={setDeleteConfirm}
+              collapsed={collapsedCategories.has(cat.id)}
+              onToggle={() => toggleCategory(cat.id)}
+              canManageServer={canManageServer}
+              canManageChannels={canManageChannels}
+              onServerSettings={() => setShowServerSettings(true)}
+              onAddChannel={() => setModalChannel('create')}
+              voiceSessionsByChannel={voiceSessionsByChannel}
+              speakingUserIds={speakingUserIds}
+            />
+          )
+        })}
+        {channels.length === 0 && (
           <p className="px-4 py-2 text-sm text-[var(--text-muted)]">
             {canManageChannels ? 'Keine Channels — Klicke + um einen zu erstellen' : 'Keine Channels'}
           </p>
@@ -409,15 +446,10 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
           onClose={() => setShowServerSettings(false)}
           onSaved={async () => {
             if (!serverId) return
-            if (backend) {
-              try {
-                const data = await apiServers.get(serverId)
-                setServer(data as Server)
-              } catch (_) {}
-            } else {
-              const { data } = await supabase.from('servers').select('*').eq('id', serverId).single()
-              setServer(data ?? null)
-            }
+            try {
+              const data = await apiServers.get(serverId)
+              setServer(data as Server)
+            } catch (_) {}
           }}
         />
       )}
@@ -434,6 +466,48 @@ export function ChannelList({ serverId, selectedChannelId, onSelectChannel, onJo
             onSelectChannel(null)
           }}
         />
+      )}
+
+      {/* Kategorie erstellen Prompt */}
+      {showCategoryPrompt && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+          onClick={() => setShowCategoryPrompt(false)}
+        >
+          <div
+            className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-xl w-full max-w-sm p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Kategorie erstellen</h3>
+            <input
+              type="text"
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              placeholder="Kategoriename"
+              className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] mb-4"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateCategory()
+                if (e.key === 'Escape') { setShowCategoryPrompt(false); setNewCategoryName('') }
+              }}
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setShowCategoryPrompt(false); setNewCategoryName('') }}
+                className="px-4 py-2 rounded text-[var(--text-secondary)] hover:bg-[var(--bg-modifier-hover)]"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={handleCreateCategory}
+                disabled={!newCategoryName.trim()}
+                className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium disabled:opacity-50"
+              >
+                Erstellen
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Löschen-Bestätigung */}

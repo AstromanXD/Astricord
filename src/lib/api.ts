@@ -174,6 +174,8 @@ export const messages = {
     if (parentMessageId) path += `&parentMessageId=${encodeURIComponent(parentMessageId)}`
     return api<ApiMessage[]>(path)
   },
+  search: (channelId: string, q: string, limit = 20) =>
+    api<ApiMessage[]>(`/api/messages/search?channelId=${channelId}&q=${encodeURIComponent(q)}&limit=${limit}`),
   async getByDm(conversationId: string, limit = 50, before?: string) {
     let path = `/api/messages?dmConversationId=${conversationId}&limit=${limit}`
     if (before) path += `&before=${encodeURIComponent(before)}`
@@ -274,6 +276,27 @@ export const servers = {
     api<{ id: string; server_id: string; user_id: string; action: string; target_type: string | null; target_id: string | null; details: Record<string, unknown>; created_at: string }[]>(
       `/api/servers/${id}/audit-log`
     ),
+  getBans: (id: string) =>
+    api<{ user_id: string; banned_by: string | null; created_at: string; username: string; avatar_url: string | null }[]>(
+      `/api/servers/${id}/bans`
+    ),
+  unbanMember: (serverId: string, userId: string) =>
+    api(`/api/servers/${serverId}/bans/${userId}`, { method: 'DELETE' }),
+  setMemberTimeout: (serverId: string, userId: string, timeoutUntil: string | null) =>
+    api(`/api/servers/${serverId}/members/${userId}/timeout`, {
+      method: 'PATCH',
+      body: JSON.stringify({ timeout_until: timeoutUntil }),
+    }),
+  setMemberNickname: (serverId: string, userId: string, nickname: string) =>
+    api(`/api/servers/${serverId}/members/${userId}/nickname`, {
+      method: 'PATCH',
+      body: JSON.stringify({ nickname: nickname.trim() }),
+    }),
+  transferOwnership: (serverId: string, newOwnerId: string) =>
+    api(`/api/servers/${serverId}/transfer-ownership`, {
+      method: 'POST',
+      body: JSON.stringify({ new_owner_id: newOwnerId }),
+    }),
 }
 
 export interface ApiServer {
@@ -288,11 +311,35 @@ export interface ApiServer {
 // Channels
 export const channels = {
   list: (serverId: string) => api<ApiChannel[]>(`/api/channels?serverId=${serverId}`),
+  listCategories: (serverId: string) =>
+    api<ApiChannelCategory[]>(`/api/channels/categories?serverId=${serverId}`),
+  createCategory: (data: { server_id: string; name: string; position?: number }) =>
+    api<ApiChannelCategory>('/api/channels/categories', { method: 'POST', body: JSON.stringify(data) }),
+  updateCategory: (id: string, data: { name?: string; position?: number }) =>
+    api<ApiChannelCategory>(`/api/channels/categories/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteCategory: (id: string) =>
+    api(`/api/channels/categories/${id}`, { method: 'DELETE' }),
   create: (data: { server_id: string; name: string; type?: string; category_id?: string; position?: number }) =>
     api<ApiChannel>('/api/channels', { method: 'POST', body: JSON.stringify(data) }),
   update: (id: string, data: Partial<ApiChannel>) =>
     api<ApiChannel>(`/api/channels/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id: string) => api(`/api/channels/${id}`, { method: 'DELETE' }),
+  getOverwrites: (channelId: string) =>
+    api<{ id: string; channel_id: string; role_id: string | null; user_id: string | null; allow: number; deny: number; created_at: string }[]>(
+      `/api/channels/${channelId}/overwrites`
+    ),
+  addOverwrite: (channelId: string, data: { role_id?: string; user_id?: string }) =>
+    api<{ id: string; channel_id: string; role_id: string | null; user_id: string | null; allow: number; deny: number; created_at: string }>(
+      `/api/channels/${channelId}/overwrites`,
+      { method: 'POST', body: JSON.stringify(data) }
+    ),
+  updateOverwrite: (channelId: string, overwriteId: string, data: { allow?: number; deny?: number }) =>
+    api<{ id: string; channel_id: string; role_id: string | null; user_id: string | null; allow: number; deny: number; created_at: string }>(
+      `/api/channels/${channelId}/overwrites/${overwriteId}`,
+      { method: 'PATCH', body: JSON.stringify(data) }
+    ),
+  deleteOverwrite: (channelId: string, overwriteId: string) =>
+    api(`/api/channels/${channelId}/overwrites/${overwriteId}`, { method: 'DELETE' }),
 }
 
 export interface ApiChannel {
@@ -301,6 +348,15 @@ export interface ApiChannel {
   category_id?: string | null
   name: string
   type: 'text' | 'voice' | 'forum'
+  position: number
+  slow_mode_seconds?: number
+  created_at?: string
+}
+
+export interface ApiChannelCategory {
+  id: string
+  server_id: string
+  name: string
   position: number
   created_at?: string
 }
@@ -341,11 +397,12 @@ export const invites = {
     api<{ id: string; server_id: string; code: string; created_by: string | null; created_at: string }[]>(
       `/api/invites?server_id=${server_id}`
     ),
-  create: (server_id: string) =>
-    api<{ id: string; server_id: string; code: string; created_by: string; created_at: string }>('/api/invites', {
+  create: (server_id: string, options?: { expires_at?: string; max_uses?: number }) =>
+    api<{ id: string; server_id: string; code: string; created_by: string; created_at: string; expires_at?: string; max_uses?: number; uses?: number }>('/api/invites', {
       method: 'POST',
-      body: JSON.stringify({ server_id }),
+      body: JSON.stringify({ server_id, ...options }),
     }),
+  delete: (id: string) => api(`/api/invites/${id}`, { method: 'DELETE' }),
   getByCode: (code: string) => api<{ server_id: string; name: string }>(`/api/invites/code/${code}`),
 }
 
@@ -419,6 +476,23 @@ export async function uploadServerEmoji(file: File): Promise<string | null> {
   formData.append('file', file)
   try {
     const res = await fetchWithTimeout(`${API_URL}/api/upload/server-emoji`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}` },
+      body: formData,
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.url ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function uploadServerIcon(file: File): Promise<string | null> {
+  const formData = new FormData()
+  formData.append('file', file)
+  try {
+    const res = await fetchWithTimeout(`${API_URL}/api/upload/server-icon`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${getToken()}` },
       body: formData,

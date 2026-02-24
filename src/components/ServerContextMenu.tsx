@@ -13,6 +13,7 @@ interface ServerContextMenuProps {
   onClose: () => void
   onServerSettings: () => void
   onAddChannel?: () => void
+  onAddCategory?: () => void
 }
 
 export function ServerContextMenu({
@@ -24,6 +25,7 @@ export function ServerContextMenu({
   onClose,
   onServerSettings,
   onAddChannel,
+  onAddCategory,
 }: ServerContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -112,7 +114,10 @@ export function ServerContextMenu({
             Kanal erstellen
           </button>
           <button
-            onClick={onClose}
+            onClick={() => {
+              onAddCategory?.()
+              onClose()
+            }}
             className="w-full px-3 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)] flex items-center gap-2"
           >
             <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">

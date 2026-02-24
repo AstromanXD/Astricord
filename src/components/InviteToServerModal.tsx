@@ -2,9 +2,8 @@
  * InviteToServerModal - Freunde zu Server einladen (Discord-Style)
  */
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
-import type { Server, Channel, Profile } from '../lib/supabase'
-import { useBackend, friends, servers, invites, dm, messages } from '../lib/api'
+import type { Server, Channel } from '../lib/supabase'
+import { friends, servers, invites, dm, messages } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 
 interface FriendProfile {
@@ -28,7 +27,6 @@ export function InviteToServerModal({
   onInviteSent,
 }: InviteToServerModalProps) {
   const { user } = useAuth()
-  const backend = useBackend()
   const [friendsList, setFriendsList] = useState<FriendProfile[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [inviteLink, setInviteLink] = useState<string | null>(null)
@@ -40,74 +38,33 @@ export function InviteToServerModal({
   useEffect(() => {
     if (!user) return
     const load = async () => {
-      if (backend) {
-        try {
-          const [friendsData, memberIds] = await Promise.all([
-            friends.list(),
-            servers.getMembers(server.id),
-          ])
-          const memberSet = new Set(memberIds ?? [])
-          const accepted = (friendsData ?? []).filter((f) => f.status === 'accepted')
-          const invitees = accepted.filter((f) => !memberSet.has(f.userId))
-          setFriendsList(
-            invitees.map((f) => ({
-              id: f.userId,
-              username: f.username,
-              avatar_url: f.avatarUrl,
-            }))
-          )
-        } catch {
-          setFriendsList([])
-        }
-      } else {
-        const { data: friendReqs } = await supabase
-          .from('friend_requests')
-          .select('from_user_id, to_user_id')
-          .or(`from_user_id.eq.${user.id},to_user_id.eq.${user.id}`)
-          .eq('status', 'accepted')
-        const friendIds = [...new Set(
-          (friendReqs ?? []).flatMap((f) =>
-            f.from_user_id === user.id ? f.to_user_id : f.from_user_id
-          )
-        )]
-        const { data: members } = await supabase
-          .from('server_members')
-          .select('user_id')
-          .eq('server_id', server.id)
-        const memberIds = new Set((members ?? []).map((m) => m.user_id))
-        const inviteeIds = friendIds.filter((id) => !memberIds.has(id))
-        if (inviteeIds.length === 0) {
-          setFriendsList([])
-          setLoading(false)
-          return
-        }
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, username, avatar_url')
-          .in('id', inviteeIds)
-        setFriendsList((profiles ?? []) as FriendProfile[])
+      try {
+        const [friendsData, memberIds] = await Promise.all([
+          friends.list(),
+          servers.getMembers(server.id),
+        ])
+        const memberSet = new Set(memberIds ?? [])
+        const accepted = (friendsData ?? []).filter((f) => f.status === 'accepted')
+        const invitees = accepted.filter((f) => !memberSet.has(f.userId))
+        setFriendsList(
+          invitees.map((f) => ({
+            id: f.userId,
+            username: f.username,
+            avatar_url: f.avatarUrl,
+          }))
+        )
+      } catch {
+        setFriendsList([])
       }
       setLoading(false)
     }
     load()
-  }, [user?.id, server.id, backend])
+  }, [user?.id, server.id])
 
   const getOrCreateInviteLink = async (): Promise<string> => {
     if (inviteLink) return inviteLink
-    if (backend) {
-      const inv = await invites.create(server.id)
-      const url = `${window.location.origin}/#invite/${inv.code}`
-      setInviteLink(url)
-      return url
-    }
-    const code = crypto.randomUUID().slice(0, 8)
-    const { error } = await supabase.from('server_invites').insert({
-      server_id: server.id,
-      code,
-      created_by: user?.id ?? null,
-    })
-    if (error) throw error
-    const url = `${window.location.origin}/#invite/${code}`
+    const inv = await invites.create(server.id)
+    const url = `${window.location.origin}/#invite/${inv.code}`
     setInviteLink(url)
     return url
   }
@@ -117,49 +74,11 @@ export function InviteToServerModal({
     setInvitingId(friend.id)
     try {
       const url = await getOrCreateInviteLink()
-
-      let dmConvId: string | null = null
-      if (backend) {
-        const { id } = await dm.createConversation(friend.id)
-        dmConvId = id
-      } else {
-        const { data: myConvs } = await supabase
-          .from('dm_participants')
-          .select('conversation_id')
-          .eq('user_id', user.id)
-        const convIds = (myConvs ?? []).map((c) => c.conversation_id)
-        if (convIds.length > 0) {
-          const { data: match } = await supabase
-            .from('dm_participants')
-            .select('conversation_id')
-            .eq('user_id', friend.id)
-            .in('conversation_id', convIds)
-            .limit(1)
-            .maybeSingle()
-          dmConvId = match?.conversation_id ?? null
-        }
-        if (!dmConvId) {
-          const { data: newId } = await supabase.rpc('create_dm_conversation', {
-            other_user_id: friend.id,
-          })
-          dmConvId = newId as string
-        }
-      }
-
-      if (dmConvId) {
-        if (backend) {
-          await messages.create({
-            dm_conversation_id: dmConvId,
-            content: `🔗 Einladung zu ${server.name}: ${url}`,
-          })
-        } else {
-          await supabase.from('messages').insert({
-            dm_conversation_id: dmConvId,
-            user_id: user.id,
-            content: `🔗 Einladung zu ${server.name}: ${url}`,
-          })
-        }
-      }
+      const { id: dmConvId } = await dm.createConversation(friend.id)
+      await messages.create({
+        dm_conversation_id: dmConvId,
+        content: `🔗 Einladung zu ${server.name}: ${url}`,
+      })
     } finally {
       setInvitingId(null)
     }

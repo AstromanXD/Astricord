@@ -1,6 +1,6 @@
 /**
  * Auth Context - Login, Register, Session, Logout
- * Unterstützt Supabase (Standard) und eigenes Backend (VITE_API_URL gesetzt)
+ * Läuft ausschließlich über das Backend
  */
 import {
   createContext,
@@ -10,7 +10,6 @@ import {
   type ReactNode,
 } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
-import { supabase } from '../lib/supabase'
 import { auth as apiAuth } from '../lib/api'
 import type { Profile } from '../lib/supabase'
 
@@ -27,7 +26,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-const useBackend = !!import.meta.env.VITE_API_URL
+function api<T>(path: string): Promise<T> {
+  const url = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+  const token = localStorage.getItem('astricord_token')
+  return fetch(`${url}${path}`, {
+    headers: { Authorization: token ? `Bearer ${token}` : '' },
+  }).then((r) => r.json())
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -36,17 +41,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const fetchProfile = async (userId: string) => {
-    if (useBackend) {
-      const p = await api<Profile>(`/api/profiles/${userId}`)
-      setProfile(p)
-      return
-    }
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-    setProfile(data)
+    const p = await api<Profile>(`/api/profiles/${userId}`)
+    setProfile(p)
   }
 
   const refreshProfile = async () => {
@@ -58,107 +54,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const initAuth = async () => {
       try {
-        if (useBackend) {
-          const { data } = await apiAuth.getSession()
-          if (cancelled) return
-          const sess = data?.session
-          setSession(sess ? { user: { id: sess.user.id } } as Session : null)
-          setUser(sess ? { id: sess.user.id } as User : null)
-          if (sess?.user) {
-            const p = await api<Profile>(`/api/profiles/${sess.user.id}`)
-            setProfile(p)
-          } else {
-            setProfile(null)
-          }
-        } else if (!import.meta.env.VITE_SUPABASE_URL) {
-          setLoading(false)
-          return
+        const { data } = await apiAuth.getSession()
+        if (cancelled) return
+        const sess = data?.session
+        setSession(sess ? { user: { id: sess.user.id } } as Session : null)
+        setUser(sess ? { id: sess.user.id } as User : null)
+        if (sess?.user) {
+          const p = await api<Profile>(`/api/profiles/${sess.user.id}`)
+          setProfile(p)
         } else {
-          const { data: { session } } = await supabase.auth.getSession()
-          if (cancelled) return
-          setSession(session)
-          setUser(session?.user ?? null)
-          if (session?.user) {
-            const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-            setProfile(data)
-          } else {
-            setProfile(null)
-          }
+          setProfile(null)
         }
       } catch (err) {
         console.error('Auth init error:', err)
-        if (useBackend) apiAuth.signOut()
-        else await supabase.auth.signOut()
+        apiAuth.signOut()
       } finally {
         if (!cancelled) setLoading(false)
       }
     }
 
     initAuth()
-
-    if (!useBackend) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        setSession(session)
-        setUser(session?.user ?? null)
-        if (session?.user) {
-          const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-          setProfile(data)
-        } else {
-          setProfile(null)
-        }
-      })
-      return () => {
-        cancelled = true
-        subscription.unsubscribe()
-      }
-    }
-
     return () => { cancelled = true }
   }, [])
 
   const signIn = async (email: string, password: string) => {
-    if (useBackend) {
-      const { data, error } = await apiAuth.login(email, password)
-      if (error) return { error }
-      if (data?.user) {
-        setUser({ id: data.user.id } as User)
-        setSession({ user: { id: data.user.id } } as Session)
-        if (data.profile) setProfile(data.profile as Profile)
-      }
-      return { error: null }
+    const { data, error } = await apiAuth.login(email, password)
+    if (error) return { error }
+    if (data?.user) {
+      setUser({ id: data.user.id } as User)
+      setSession({ user: { id: data.user.id } } as Session)
+      if (data.profile) setProfile(data.profile as Profile)
     }
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error: error as Error | null }
+    return { error: null }
   }
 
   const signUp = async (email: string, password: string, username?: string) => {
-    if (useBackend) {
-      const { data, error } = await apiAuth.register(email, password, username)
-      if (error) return { error }
-      if (data?.user) {
-        setUser({ id: data.user.id } as User)
-        setSession({ user: { id: data.user.id } } as Session)
-        if (data.profile) setProfile(data.profile as Profile)
-      }
-      return { error: null }
+    const { data, error } = await apiAuth.register(email, password, username)
+    if (error) return { error }
+    if (data?.user) {
+      setUser({ id: data.user.id } as User)
+      setSession({ user: { id: data.user.id } } as Session)
+      if (data.profile) setProfile(data.profile as Profile)
     }
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { username: username ?? email.split('@')[0] } },
-    })
-    return { error: error as Error | null }
+    return { error: null }
   }
 
   const signOut = async () => {
-    if (useBackend) {
-      await apiAuth.signOut()
-      setUser(null)
-      setProfile(null)
-      setSession(null)
-      return
-    }
-    await supabase.auth.signOut()
+    await apiAuth.signOut()
+    setUser(null)
+    setProfile(null)
+    setSession(null)
   }
 
   return (
@@ -177,14 +122,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       {children}
     </AuthContext.Provider>
   )
-}
-
-function api<T>(path: string): Promise<T> {
-  const url = import.meta.env.VITE_API_URL || 'http://localhost:3001'
-  const token = localStorage.getItem('astricord_token')
-  return fetch(`${url}${path}`, {
-    headers: { Authorization: token ? `Bearer ${token}` : '' },
-  }).then((r) => r.json())
 }
 
 export function useAuth() {

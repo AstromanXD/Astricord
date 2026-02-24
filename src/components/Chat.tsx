@@ -2,10 +2,9 @@
  * Chat - Text-Chat mit Realtime-Nachrichten, Emojis und Bildern
  */
 import { useEffect, useState, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Channel, Message, Server } from '../lib/supabase'
 import type { Profile } from '../lib/supabase'
-import { api, useBackend, useBackendRealtime, messages as messagesApi, getProfilesByIds, uploadFile as apiUploadFile } from '../lib/api'
+import { api, useBackendRealtime, messages as messagesApi, getProfilesByIds, uploadFile as apiUploadFile } from '../lib/api'
 import { InviteToServerModal } from './InviteToServerModal'
 import { Message as MessageComponent } from './Message'
 import { ThreadPanel } from './ThreadPanel'
@@ -22,12 +21,12 @@ interface ChatProps {
   serverId?: string | null
   onOpenEmojiSettings?: (serverId: string) => void
   onToggleMembers?: () => void
+  messageIdToScroll?: string | null
 }
 
-export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }: ChatProps) {
+export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers, messageIdToScroll }: ChatProps) {
   const { user, profile } = useAuth()
   const { settings: userSettings } = useUserSettings()
-  const backend = useBackend()
   const serverEmojis = useServerEmojis(channel?.server_id ?? serverId ?? null)
   const [messages, setMessages] = useState<Message[]>([])
   const [hasMore, setHasMore] = useState(true)
@@ -54,14 +53,28 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null)
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null)
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [searchResults, setSearchResults] = useState<Message[] | null>(null)
   const reactionPickerButtonRef = useRef<HTMLButtonElement>(null)
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const sendingRef = useRef(false)
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'k') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const wsChannel = channel && (channel.type === 'text' || channel.type === 'forum') ? `messages:${channel.id}` : null
-  useBackendRealtime(backend ? wsChannel : null, (event, payload) => {
+  useBackendRealtime(wsChannel, (event, payload) => {
     const msg = payload as Message
     if (event === 'INSERT') {
       setMessages((prev) => {
@@ -79,92 +92,22 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
       return
     }
 
-    if (backend) {
-      messagesApi.getByChannel(channel.id).then((data) => {
-        setMessages(data ?? [])
-        setHasMore((data?.length ?? 0) >= 50)
-      })
-      return
-    }
-
-    const fetchMessages = async (olderThan?: string) => {
-      let q = supabase
-        .from('messages')
-        .select('*')
-        .eq('channel_id', channel.id)
-        .order('created_at', { ascending: false })
-        .limit(50)
-      if (olderThan) q = q.lt('created_at', olderThan)
-      const { data } = await q
-      const ordered = (data ?? []).reverse()
-      if (olderThan) {
-        setMessages((prev) => [...ordered, ...prev])
-      } else {
-        setMessages(ordered)
-      }
+    messagesApi.getByChannel(channel.id).then((data) => {
+      setMessages(data ?? [])
       setHasMore((data?.length ?? 0) >= 50)
-    }
-    fetchMessages()
-
-    const channelSub = supabase
-      .channel(`messages:${channel.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `channel_id=eq.${channel.id}` },
-        (payload) => {
-          const msg = payload.new as Message
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === msg.id)) return prev
-            if (msg.user_id !== user?.id) playSoundMessage()
-            return [...prev, msg]
-          })
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `channel_id=eq.${channel.id}` },
-        (payload) => {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === (payload.new as Message).id ? (payload.new as Message) : m))
-          )
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'messages', filter: `channel_id=eq.${channel.id}` },
-        (payload) => {
-          setMessages((prev) => prev.filter((m) => m.id !== (payload.old as { id: string }).id))
-        }
-      )
-      .subscribe()
-
-    return () => {
-      channelSub.unsubscribe()
-    }
-  }, [channel?.id, backend])
+    })
+  }, [channel?.id])
 
   useEffect(() => {
     const userIds = [...new Set(messages.map((m) => m.user_id))]
     if (userIds.length === 0) return
 
-    if (backend) {
-      getProfilesByIds(userIds).then((data) => {
-        const map: Record<string, Profile> = {}
-        data?.forEach((p) => (map[p.id] = p))
-        setProfiles(map)
-      })
-    } else {
-      supabase
-        .from('profiles')
-        .select('*')
-        .in('id', userIds)
-        .then(({ data }) => {
-          const map: Record<string, Profile> = {}
-          data?.forEach((p) => (map[p.id] = p))
-          setProfiles(map)
-        })
-    }
-  }, [messages, backend])
+    getProfilesByIds(userIds).then((data) => {
+      const map: Record<string, Profile> = {}
+      data?.forEach((p) => (map[p.id] = p))
+      setProfiles(map)
+    })
+  }, [messages])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -173,33 +116,19 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
   useEffect(() => {
     const sid = channel?.server_id ?? serverId
     if (!sid) return
-    if (backend) {
-      api<{ name: string }>(`/api/servers/${sid}`).then((s) => setServerName(s?.name ?? '')).catch(() => {})
-    } else {
-      supabase.from('servers').select('name').eq('id', sid).single().then(({ data }) => {
-        setServerName(data?.name ?? '')
-      })
-    }
-  }, [channel?.server_id, serverId, backend])
+    api<{ name: string }>(`/api/servers/${sid}`).then((s) => setServerName(s?.name ?? '')).catch(() => {})
+  }, [channel?.server_id, serverId])
 
   const openInviteModal = async () => {
     const sid = channel?.server_id ?? serverId
     if (!sid) return
-    if (backend) {
-      try {
-        const data = await api<Server>(`/api/servers/${sid}`)
-        if (data) {
-          setInviteServer(data)
-          setShowInviteModal(true)
-        }
-      } catch (_) {}
-    } else {
-      const { data } = await supabase.from('servers').select('*').eq('id', sid).single()
+    try {
+      const data = await api<Server>(`/api/servers/${sid}`)
       if (data) {
         setInviteServer(data)
         setShowInviteModal(true)
       }
-    }
+    } catch (_) {}
   }
 
   const getAttachmentType = (file: File): 'image' | 'audio' | 'video' | null => {
@@ -209,20 +138,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     return null
   }
 
-  const uploadFile = async (file: File): Promise<string | null> => {
-    if (backend) {
-      return apiUploadFile(file)
-    }
-    const ext = file.name.split('.').pop() || 'bin'
-    const path = `${channel!.id}/${crypto.randomUUID()}.${ext}`
-    const contentType = file.type || (ext === 'mp3' ? 'audio/mpeg' : undefined)
-    const { error } = await supabase.storage
-      .from('message-attachments')
-      .upload(path, file, { upsert: false, contentType: contentType || undefined })
-    if (error) return null
-    const { data } = supabase.storage.from('message-attachments').getPublicUrl(path)
-    return data.publicUrl
-  }
+  const uploadFile = async (file: File): Promise<string | null> => apiUploadFile(file)
 
   const processFiles = async (files: FileList | File[]) => {
     const arr = Array.from(files)
@@ -289,100 +205,92 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     sendingRef.current = true
     setSending(true)
 
-    if (backend) {
-      try {
-        const newMessage = await messagesApi.create({
-          channel_id: channel.id,
-          content,
-          attachments: atts.length ? atts : undefined,
-          parent_message_id: parentId,
-        })
-        if (newMessage) {
-          setMessages((prev) =>
-            prev.some((m) => m.id === newMessage.id) ? prev : [...prev, { ...newMessage, attachments: atts }]
-          )
-          setProfiles((prev) =>
-            profile && !prev[user.id] ? { ...prev, [user.id]: profile } : prev
-          )
-        }
-      } catch (_) {
-        setInput(content)
-        setAttachments(atts)
-      }
-    } else {
-      const { data: newMessage } = await supabase
-        .from('messages')
-        .insert({
-          channel_id: channel.id,
-          user_id: user.id,
-          content,
-          attachments: atts.length ? atts : undefined,
-          parent_message_id: parentId ?? undefined,
-        })
-        .select()
-        .single()
-
+    try {
+      const newMessage = await messagesApi.create({
+        channel_id: channel.id,
+        content,
+        attachments: atts.length ? atts : undefined,
+        parent_message_id: parentId,
+      })
       if (newMessage) {
-        const msg = { ...(newMessage as Message), attachments: atts }
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
+        setMessages((prev) =>
+          prev.some((m) => m.id === newMessage.id) ? prev : [...prev, { ...newMessage, attachments: atts }]
+        )
         setProfiles((prev) =>
           profile && !prev[user.id] ? { ...prev, [user.id]: profile } : prev
         )
       }
+    } catch (err: unknown) {
+      setInput(content)
+      setAttachments(atts)
+      setSendError(err instanceof Error ? err.message : 'Fehler beim Senden')
+      setTimeout(() => setSendError(null), 5000)
     }
 
     setSending(false)
     sendingRef.current = false
   }
 
-  const filteredMessages = searchQuery.trim()
-    ? messages.filter(
-        (m) =>
-          m.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (m.attachments ?? []).some((a) => a.filename?.toLowerCase().includes(searchQuery.toLowerCase()))
-      )
-    : messages
+  const runServerSearch = async () => {
+    if (!channel || !searchQuery.trim() || (channel.type !== 'text' && channel.type !== 'forum')) return
+    try {
+      const results = await messagesApi.search(channel.id, searchQuery.trim())
+      setSearchResults(results ?? [])
+    } catch {
+      setSearchResults([])
+    }
+  }
+
+  const displayMessages = searchResults !== null ? searchResults : (
+    searchQuery.trim()
+      ? messages.filter(
+          (m) =>
+            m.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (m.attachments ?? []).some((a) => a.filename?.toLowerCase().includes(searchQuery.toLowerCase()))
+        )
+      : messages
+  )
+
+  useEffect(() => {
+    if (!searchQuery.trim()) setSearchResults(null)
+  }, [searchQuery])
+
+  useEffect(() => {
+    if (searchResults && searchResults.length > 0) {
+      const ids = [...new Set(searchResults.map((m) => m.user_id))]
+      const missing = ids.filter((id) => !profiles[id])
+      if (missing.length > 0) {
+        getProfilesByIds(missing).then((list) => {
+          setProfiles((prev) => {
+            const next = { ...prev }
+            list.forEach((p) => { next[p.id] = p })
+            return next
+          })
+        })
+      }
+    }
+  }, [searchResults])
 
   const pinnedMessages = messages.filter((m) => m.is_pinned)
 
   const togglePin = async (msg: Message) => {
     if (msg.user_id !== user?.id) return
-    if (backend) {
-      try {
-        await messagesApi.update(msg.id, { is_pinned: !msg.is_pinned })
-        setMessages((prev) =>
-          prev.map((m) => (m.id === msg.id ? { ...m, is_pinned: !m.is_pinned } : m))
-        )
-      } catch (_) {}
-    } else {
-      await supabase
-        .from('messages')
-        .update({ is_pinned: !msg.is_pinned })
-        .eq('id', msg.id)
+    try {
+      await messagesApi.update(msg.id, { is_pinned: !msg.is_pinned })
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, is_pinned: !m.is_pinned } : m))
       )
-    }
+    } catch (_) {}
   }
 
   const handleEditMessage = async (msg: Message, newContent: string) => {
     if (msg.user_id !== user?.id) return
-    if (backend) {
-      try {
-        await messagesApi.update(msg.id, { content: newContent })
-        setMessages((prev) =>
-          prev.map((m) => (m.id === msg.id ? { ...m, content: newContent, edited_at: new Date().toISOString() } : m))
-        )
-      } catch (_) {}
-    } else {
-      await supabase
-        .from('messages')
-        .update({ content: newContent, edited_at: new Date().toISOString() })
-        .eq('id', msg.id)
+    try {
+      await messagesApi.update(msg.id, { content: newContent })
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, content: newContent, edited_at: new Date().toISOString() } : m))
       )
-    }
+    } catch (_) {}
   }
 
   const scrollToMessage = (messageId: string) => {
@@ -394,43 +302,40 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
     }
   }
 
+  const copyMessageLink = (messageId: string) => {
+    if (!serverId || !channel) return
+    const url = `${window.location.origin}${window.location.pathname}#channels/${serverId}/${channel.id}/${messageId}`
+    navigator.clipboard.writeText(url).catch(() => {})
+  }
+
+  useEffect(() => {
+    if (!messageIdToScroll || !channel) return
+    const el = messageRefs.current[messageIdToScroll]
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedMessageId(messageIdToScroll)
+      setTimeout(() => setHighlightedMessageId(null), 2000)
+    }
+  }, [messageIdToScroll, channel?.id])
+
   const handleDeleteMessage = async (msg: Message) => {
     if (msg.user_id !== user?.id) return
-    if (backend) {
-      try {
-        await messagesApi.delete(msg.id)
-        setMessages((prev) => prev.filter((m) => m.id !== msg.id))
-      } catch (_) {}
-    } else {
-      await supabase.from('messages').delete().eq('id', msg.id)
+    try {
+      await messagesApi.delete(msg.id)
       setMessages((prev) => prev.filter((m) => m.id !== msg.id))
-    }
+    } catch (_) {}
   }
 
   const loadMore = async () => {
     if (!channel || !hasMore || loadingMore || messages.length === 0) return
     setLoadingMore(true)
     const oldest = messages[0]
-    if (backend) {
-      try {
-        const data = await messagesApi.getByChannel(channel.id, 50, oldest.created_at)
-        const ordered = (data ?? []).reverse()
-        setMessages((prev) => [...ordered, ...prev])
-        setHasMore((data?.length ?? 0) >= 50)
-      } catch (_) {}
-    } else {
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('channel_id', channel.id)
-        .is('parent_message_id', null)
-        .lt('created_at', oldest.created_at)
-        .order('created_at', { ascending: false })
-        .limit(50)
+    try {
+      const data = await messagesApi.getByChannel(channel.id, 50, oldest.created_at)
       const ordered = (data ?? []).reverse()
       setMessages((prev) => [...ordered, ...prev])
       setHasMore((data?.length ?? 0) >= 50)
-    }
+    } catch (_) {}
     setLoadingMore(false)
   }
 
@@ -508,13 +413,29 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M15 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm-9-2V7H4v3H1v2h3v3h2v-3h3v-2H6zm9 4c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
           </button>
-          <input
-            type="text"
-            placeholder="Suchen"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-28 px-2 py-1 rounded bg-[var(--bg-tertiary)] text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none"
-          />
+          <div className="flex gap-1">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Suchen (Strg+K)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') runServerSearch()
+              }}
+              className="w-28 px-2 py-1 rounded bg-[var(--bg-tertiary)] text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none"
+            />
+            {channel && searchQuery.trim() && (
+              <button
+                type="button"
+                onClick={runServerSearch}
+                className="px-2 py-1 rounded bg-[var(--accent)] text-white text-xs"
+                title="Im Kanal suchen"
+              >
+                Suchen
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <div className="flex-1 flex min-w-0 min-h-0">
@@ -581,6 +502,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                         serverEmojisForPicker={serverEmojis}
                         serverNameForPicker={serverName}
                         onOpenEmojiSettings={(channel?.server_id ?? serverId) && onOpenEmojiSettings ? () => onOpenEmojiSettings(channel?.server_id ?? serverId!) : undefined}
+                        onCopyLink={serverId && channel ? () => copyMessageLink(msg.id) : undefined}
                       />
                     </div>
                   )
@@ -588,13 +510,18 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
               </div>
             )}
           </div>
-        ) : filteredMessages.length === 0 ? (
+        ) : displayMessages.length === 0 ? (
           <div className="px-4 text-[var(--text-muted)] text-center py-8">
             {searchQuery.length > 0 ? 'Keine Nachrichten gefunden.' : 'Noch keine Nachrichten. Starte die Unterhaltung!'}
           </div>
         ) : (
           <>
-            {hasMore && (
+            {searchResults !== null && (
+              <div className="px-4 py-2 text-sm text-[var(--text-muted)]">
+                {displayMessages.length} Ergebnis(se) — <button type="button" onClick={() => setSearchResults(null)} className="text-[var(--accent)] hover:underline">Zurück</button>
+              </div>
+            )}
+            {hasMore && searchResults === null && (
               <div className="px-4 py-2 flex justify-center">
                 <button
                   type="button"
@@ -606,7 +533,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                 </button>
               </div>
             )}
-            {filteredMessages.map((msg) => {
+            {displayMessages.map((msg) => {
               const parentMsg = msg.parent_message_id ? messages.find((m) => m.id === msg.parent_message_id) : null
               const parentInfo = parentMsg
                 ? {
@@ -646,6 +573,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                     serverEmojisForPicker={serverEmojis}
                     serverNameForPicker={serverName}
                     onOpenEmojiSettings={(channel?.server_id ?? serverId) && onOpenEmojiSettings ? () => onOpenEmojiSettings(channel?.server_id ?? serverId!) : undefined}
+                    onCopyLink={serverId && channel ? () => copyMessageLink(msg.id) : undefined}
                   />
                 </div>
               )
@@ -665,6 +593,11 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
       )}
       </div>
       <form onSubmit={sendMessage} className="px-4 pb-4">
+        {sendError && (
+          <div className="mb-2 px-3 py-2 rounded bg-[var(--accent-danger)]/20 text-[var(--accent-danger)] text-sm">
+            {sendError}
+          </div>
+        )}
         {replyToMessage && (
           <div className="flex items-center justify-between px-4 py-2 bg-[var(--bg-tertiary)] border-b border-[var(--border)]">
             <span className="text-sm text-[var(--text-muted)]">
@@ -750,6 +683,7 @@ export function Chat({ channel, serverId, onOpenEmojiSettings, onToggleMembers }
                 sendMessage()
               }
             }}
+            title="Enter oder Strg+Enter zum Senden"
             placeholder={replyToMessage ? `Nachricht an @${profiles[replyToMessage.user_id]?.username ?? 'Unbekannt'}` : `Nachricht an #${channel.name}`}
             maxLength={2000}
             rows={1}

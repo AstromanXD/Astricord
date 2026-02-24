@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { pool } from '../config/db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { broadcast } from '../lib/realtime.js'
-import { PERMISSIONS, hasPermission, getEffectivePermissions } from '../lib/permissions.js'
+import { PERMISSIONS, hasPermission, getEffectivePermissions, getChannelPermissions } from '../lib/permissions.js'
 
 const router = Router()
 router.use(authMiddleware)
@@ -19,7 +19,7 @@ async function canAccessChannel(channelId, userId, requiredPerm = PERMISSIONS.VI
     [ch[0].server_id, userId]
   )
   if (m.length === 0) return false
-  const perms = await getEffectivePermissions(pool, ch[0].server_id, userId)
+  const perms = await getChannelPermissions(pool, channelId, userId)
   return hasPermission(perms, requiredPerm)
 }
 
@@ -38,6 +38,29 @@ function toMessage(row) {
   if (typeof m.attachments === 'string') m.attachments = JSON.parse(m.attachments || '[]')
   return m
 }
+
+// GET /messages/search?channelId=xxx&q=xxx&limit=20
+router.get('/search', async (req, res) => {
+  try {
+    const { channelId, q, limit = 20 } = req.query
+    if (!channelId || !q?.trim()) return res.status(400).json({ error: 'channelId und q erforderlich' })
+
+    const access = await canAccessChannel(channelId, req.user.id)
+    if (!access) return res.status(403).json({ error: 'Kein Zugriff' })
+
+    const search = `%${String(q).trim()}%`
+    const [rows] = await pool.execute(
+      `SELECT id, channel_id, dm_conversation_id, user_id, content, attachments, is_pinned, edited_at, parent_message_id, created_at
+       FROM messages WHERE channel_id = ? AND content LIKE ?
+       ORDER BY created_at DESC LIMIT ?`,
+      [channelId, search, parseInt(limit, 10) || 20]
+    )
+    res.json(rows.map(toMessage).reverse())
+  } catch (err) {
+    console.error('Message search error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
 
 // GET /messages?channelId=xxx&limit=50&before=xxx
 // GET /messages?dmConversationId=xxx&limit=50
@@ -111,6 +134,52 @@ router.post('/', async (req, res) => {
     if (channel_id) {
       const canSend = await canAccessChannel(channel_id, req.user.id, PERMISSIONS.SEND_MESSAGES)
       if (!canSend) return res.status(403).json({ error: 'Keine Berechtigung zum Senden' })
+
+      const [ch] = await pool.execute(
+        'SELECT server_id FROM channels WHERE id = ?',
+        [channel_id]
+      )
+      if (ch.length) {
+        const [member] = await pool.execute(
+          'SELECT timeout_until FROM server_members WHERE server_id = ? AND user_id = ?',
+          [ch[0].server_id, req.user.id]
+        )
+        if (member.length && member[0].timeout_until) {
+          const until = new Date(member[0].timeout_until).getTime()
+          if (until > Date.now()) {
+            return res.status(403).json({
+              error: `Du bist bis ${new Date(until).toLocaleString()} im Timeout`,
+              timeout_until: member[0].timeout_until,
+            })
+          }
+        }
+      }
+
+      const [chSlow] = await pool.execute(
+        'SELECT slow_mode_seconds FROM channels WHERE id = ?',
+        [channel_id]
+      )
+      const slowMode = chSlow[0]?.slow_mode_seconds ?? 0
+      if (slowMode > 0) {
+        const perms = await getChannelPermissions(pool, channel_id, req.user.id)
+        if (!hasPermission(perms, PERMISSIONS.BYPASS_SLOW_MODE)) {
+          const [last] = await pool.execute(
+            'SELECT created_at FROM messages WHERE channel_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1',
+            [channel_id, req.user.id]
+          )
+          if (last.length) {
+            const lastAt = new Date(last[0].created_at).getTime()
+            const now = Date.now()
+            const remaining = (lastAt / 1000 + slowMode) * 1000 - now
+            if (remaining > 0) {
+              return res.status(429).json({
+                error: `Slow-Modus: Warte noch ${Math.ceil(remaining / 1000)} Sekunden`,
+                retry_after: Math.ceil(remaining / 1000),
+              })
+            }
+          }
+        }
+      }
 
       await pool.execute(
         'INSERT INTO messages (id, channel_id, user_id, content, attachments, parent_message_id) VALUES (?, ?, ?, ?, ?, ?)',
@@ -215,7 +284,28 @@ router.delete('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Keine Berechtigung' })
     }
 
-    const [old] = await pool.execute('SELECT channel_id, dm_conversation_id FROM messages WHERE id = ?', [req.params.id])
+    const [old] = await pool.execute(
+      'SELECT m.channel_id, m.dm_conversation_id, m.user_id, m.content FROM messages m WHERE m.id = ?',
+      [req.params.id]
+    )
+    const deletedByOther = !isOwn && old.length
+    if (old[0]?.channel_id && deletedByOther) {
+      const [ch] = await pool.execute('SELECT server_id FROM channels WHERE id = ?', [old[0].channel_id])
+      if (ch.length) {
+        await pool.execute(
+          'INSERT INTO audit_log (id, server_id, user_id, action, target_type, target_id, details) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [
+            uuidv4(),
+            ch[0].server_id,
+            req.user.id,
+            'message_deleted',
+            'message',
+            req.params.id,
+            JSON.stringify({ deleted_user_id: old[0].user_id, content_preview: (old[0].content || '').slice(0, 100) }),
+          ]
+        )
+      }
+    }
     await pool.execute('DELETE FROM messages WHERE id = ?', [req.params.id])
     if (old.length) {
       if (old[0].channel_id) broadcast(`messages:${old[0].channel_id}`, 'DELETE', { id: req.params.id })

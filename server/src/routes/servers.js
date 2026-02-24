@@ -150,12 +150,12 @@ router.get('/:id/members-detail', async (req, res) => {
     )
     if (!member.length) return res.status(403).json({ error: 'Kein Zugriff' })
 
-    const [[roles], [members], [memberRoles], [profiles]] = await Promise.all([
+    const [[roles], [members], [memberRoles], [profiles], [nicknames]] = await Promise.all([
       pool.execute(
         'SELECT id, server_id, name, color, position FROM server_roles WHERE server_id = ? ORDER BY position DESC',
         [req.params.id]
       ),
-      pool.execute('SELECT user_id FROM server_members WHERE server_id = ?', [req.params.id]),
+      pool.execute('SELECT user_id, timeout_until FROM server_members WHERE server_id = ?', [req.params.id]),
       pool.execute(
         'SELECT user_id, role_id FROM server_member_roles WHERE server_id = ?',
         [req.params.id]
@@ -163,6 +163,10 @@ router.get('/:id/members-detail', async (req, res) => {
       pool.execute(
         `SELECT p.id, p.username, p.avatar_url, p.theme, p.status, p.created_at FROM profiles p
          WHERE p.id IN (SELECT user_id FROM server_members WHERE server_id = ?)`,
+        [req.params.id]
+      ),
+      pool.execute(
+        'SELECT user_id, nickname FROM server_member_nicknames WHERE server_id = ?',
         [req.params.id]
       ),
     ])
@@ -185,11 +189,14 @@ router.get('/:id/members-detail', async (req, res) => {
         rolesByUser.set(mr.user_id, list)
       }
     })
+    const nicknameMap = Object.fromEntries((nicknames ?? []).map((n) => [n.user_id, n.nickname]))
 
     const result = {
       roles: roles.map((r) => ({ ...r, created_at: r.created_at?.toISOString?.() ?? r.created_at })),
       members: members.map((m) => ({
         userId: m.user_id,
+        nickname: nicknameMap[m.user_id] ?? null,
+        timeout_until: m.timeout_until?.toISOString?.() ?? null,
         profile: profileMap[m.user_id] ?? {
           id: m.user_id,
           username: 'Unbekannt',
@@ -259,6 +266,86 @@ router.post('/:id/members/:userId/ban', async (req, res) => {
     res.status(204).send()
   } catch (err) {
     console.error('Ban error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.patch('/:id/members/:userId/timeout', async (req, res) => {
+  try {
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MODERATE_MEMBERS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
+    if (req.params.userId === req.user.id) return res.status(400).json({ error: 'Kann sich nicht selbst in Timeout setzen' })
+
+    const [srv] = await pool.execute('SELECT owner_id FROM servers WHERE id = ?', [req.params.id])
+    if (srv.length && srv[0].owner_id === req.params.userId) {
+      return res.status(400).json({ error: 'Owner kann nicht in Timeout gesetzt werden' })
+    }
+
+    const { timeout_until } = req.body
+    const until = timeout_until ? new Date(timeout_until) : null
+    if (until && until.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'Timeout muss in der Zukunft liegen' })
+    }
+
+    await pool.execute(
+      'UPDATE server_members SET timeout_until = ? WHERE server_id = ? AND user_id = ?',
+      [until, req.params.id, req.params.userId]
+    )
+    res.status(204).send()
+  } catch (err) {
+    console.error('Timeout error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.patch('/:id/members/:userId/nickname', async (req, res) => {
+  try {
+    const { nickname } = req.body
+    const isSelf = req.params.userId === req.user.id
+    const canManage = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_NICKNAMES)
+    const canChangeOwn = await checkPerm(req.params.id, req.user.id, PERMISSIONS.CHANGE_NICKNAME)
+    if (!isSelf && !canManage) return res.status(403).json({ error: 'Keine Berechtigung' })
+    if (isSelf && !canChangeOwn && !canManage) return res.status(403).json({ error: 'Keine Berechtigung' })
+
+    const trimmed = (nickname ?? '').trim().slice(0, 32)
+    if (trimmed.length === 0) {
+      await pool.execute(
+        'DELETE FROM server_member_nicknames WHERE server_id = ? AND user_id = ?',
+        [req.params.id, req.params.userId]
+      )
+    } else {
+      await pool.execute(
+        'INSERT INTO server_member_nicknames (server_id, user_id, nickname) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE nickname = ?',
+        [req.params.id, req.params.userId, trimmed, trimmed]
+      )
+    }
+    res.status(204).send()
+  } catch (err) {
+    console.error('Nickname error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.post('/:id/transfer-ownership', async (req, res) => {
+  try {
+    const [srv] = await pool.execute('SELECT owner_id FROM servers WHERE id = ?', [req.params.id])
+    if (!srv.length || srv[0].owner_id !== req.user.id) {
+      return res.status(403).json({ error: 'Nur der Owner kann die Besitzrechte übertragen' })
+    }
+    const { new_owner_id } = req.body
+    if (!new_owner_id) return res.status(400).json({ error: 'new_owner_id erforderlich' })
+    if (new_owner_id === req.user.id) return res.status(400).json({ error: 'Du bist bereits Owner' })
+
+    const [member] = await pool.execute(
+      'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
+      [req.params.id, new_owner_id]
+    )
+    if (!member.length) return res.status(400).json({ error: 'Neuer Owner muss Server-Mitglied sein' })
+
+    await pool.execute('UPDATE servers SET owner_id = ? WHERE id = ?', [new_owner_id, req.params.id])
+    res.status(204).send()
+  } catch (err) {
+    console.error('Transfer ownership error:', err)
     res.status(500).json({ error: 'Fehler' })
   }
 })
@@ -478,6 +565,47 @@ router.patch('/:id', async (req, res) => {
   }
 })
 
+router.get('/:id/bans', async (req, res) => {
+  try {
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.BAN_MEMBERS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
+
+    const [rows] = await pool.execute(
+      `SELECT sb.user_id, sb.banned_by, sb.created_at, p.username, p.avatar_url
+       FROM server_bans sb
+       LEFT JOIN profiles p ON p.id = sb.user_id
+       WHERE sb.server_id = ?
+       ORDER BY sb.created_at DESC`,
+      [req.params.id]
+    )
+    res.json(rows.map((r) => ({
+      user_id: r.user_id,
+      banned_by: r.banned_by,
+      created_at: r.created_at?.toISOString?.() ?? r.created_at,
+      username: r.username ?? 'Unbekannt',
+      avatar_url: r.avatar_url,
+    })))
+  } catch (err) {
+    console.error('Bans list error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
+router.delete('/:id/bans/:userId', async (req, res) => {
+  try {
+    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.BAN_MEMBERS)
+    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
+    await pool.execute(
+      'DELETE FROM server_bans WHERE server_id = ? AND user_id = ?',
+      [req.params.id, req.params.userId]
+    )
+    res.status(204).send()
+  } catch (err) {
+    console.error('Unban error:', err)
+    res.status(500).json({ error: 'Fehler' })
+  }
+})
+
 router.get('/:id/audit-log', async (req, res) => {
   try {
     const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.VIEW_AUDIT_LOG)
@@ -502,8 +630,10 @@ router.get('/:id/audit-log', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const ok = await checkPerm(req.params.id, req.user.id, PERMISSIONS.MANAGE_SERVER)
-    if (!ok) return res.status(403).json({ error: 'Keine Berechtigung' })
+    const [srv] = await pool.execute('SELECT owner_id FROM servers WHERE id = ?', [req.params.id])
+    if (!srv.length || srv[0].owner_id !== req.user.id) {
+      return res.status(403).json({ error: 'Nur der Server-Owner kann den Server löschen' })
+    }
 
     await pool.execute('DELETE FROM servers WHERE id = ?', [req.params.id])
     res.status(204).send()
@@ -519,12 +649,20 @@ router.post('/join', async (req, res) => {
     if (!code) return res.status(400).json({ error: 'Code erforderlich' })
 
     const [invites] = await pool.execute(
-      'SELECT server_id FROM server_invites WHERE code = ?',
+      'SELECT server_id, expires_at, max_uses, uses FROM server_invites WHERE code = ?',
       [code]
     )
     if (!invites.length) return res.status(404).json({ error: 'Einladung ungültig' })
 
-    const serverId = invites[0].server_id
+    const inv = invites[0]
+    if (inv.expires_at && new Date(inv.expires_at) < new Date()) {
+      return res.status(410).json({ error: 'Einladung abgelaufen' })
+    }
+    if (inv.max_uses != null && (inv.uses ?? 0) >= inv.max_uses) {
+      return res.status(410).json({ error: 'Einladung ausgeschöpft' })
+    }
+
+    const serverId = inv.server_id
     const [member] = await pool.execute(
       'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?',
       [serverId, req.user.id]
@@ -545,6 +683,10 @@ router.post('/join', async (req, res) => {
         [serverId, req.user.id, memberRole[0].id]
       )
     }
+    await pool.execute(
+      'UPDATE server_invites SET uses = uses + 1 WHERE code = ?',
+      [code]
+    )
 
     const [server] = await pool.execute(
       'SELECT id, name, icon_url, description, banner_color, created_at FROM servers WHERE id = ?',

@@ -3,8 +3,7 @@
  * Bei Voice: Erweiterte Ansicht mit Sprachchat-Status
  */
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
-import { useBackend, channels, servers } from '../lib/api'
+import { channels, servers } from '../lib/api'
 import { ServerList } from './ServerList'
 import { UserBar } from './UserBar'
 import type { Channel } from '../lib/supabase'
@@ -42,7 +41,6 @@ export function LeftSidebar({
   onToggleMute,
 }: LeftSidebarProps) {
 
-  const backend = useBackend()
   const [voiceChannelName, setVoiceChannelName] = useState<string | null>(null)
   const [voiceServerName, setVoiceServerName] = useState<string | null>(null)
 
@@ -53,38 +51,22 @@ export function LeftSidebar({
       return
     }
     const fetch = async () => {
-      if (backend && selectedServerId) {
-        try {
-          const chList = await channels.list(selectedServerId)
-          const ch = chList?.find((c) => c.id === currentChannelId)
-          if (ch) {
-            setVoiceChannelName(ch.name)
-            const srv = await servers.get(ch.server_id)
-            setVoiceServerName(srv?.name ?? null)
-          }
-        } catch {
-          setVoiceChannelName(null)
-          setVoiceServerName(null)
+      if (!selectedServerId) return
+      try {
+        const chList = await channels.list(selectedServerId)
+        const ch = chList?.find((c) => c.id === currentChannelId)
+        if (ch) {
+          setVoiceChannelName(ch.name)
+          const srv = await servers.get(ch.server_id)
+          setVoiceServerName(srv?.name ?? null)
         }
-        return
-      }
-      const { data: ch } = await supabase
-        .from('channels')
-        .select('name, server_id')
-        .eq('id', currentChannelId)
-        .single()
-      if (ch) {
-        setVoiceChannelName(ch.name)
-        const { data: srv } = await supabase
-          .from('servers')
-          .select('name')
-          .eq('id', ch.server_id)
-          .single()
-        setVoiceServerName(srv?.name ?? null)
+      } catch {
+        setVoiceChannelName(null)
+        setVoiceServerName(null)
       }
     }
     fetch()
-  }, [currentChannelId, isInVoice, backend, selectedServerId])
+  }, [currentChannelId, isInVoice, selectedServerId])
 
   return (
     <div className="w-[72px] flex flex-col bg-[var(--bg-sidebar)] border-r border-[var(--border)]">

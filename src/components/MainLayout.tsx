@@ -3,8 +3,7 @@
  * [ServerList | ChannelList] + UserBar unten (spannt über beide) | Chat | MemberList
  */
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
-import { useBackend, invites, servers, dm } from '../lib/api'
+import { invites, servers, dm, channels } from '../lib/api'
 import { FRIENDS_ID } from './ServerList'
 import { ServerList } from './ServerList'
 import { ChannelList } from './ChannelList'
@@ -25,7 +24,6 @@ import type { Channel, Profile } from '../lib/supabase'
 
 export function MainLayout() {
   const { user, profile } = useAuth()
-  const backend = useBackend()
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null)
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null)
   const lastTextChannelByServer = useRef<Record<string, Channel>>({})
@@ -34,6 +32,7 @@ export function MainLayout() {
   const [serverSettingsServer, setServerSettingsServer] = useState<Server | null>(null)
   const [serverSettingsInitialTab, setServerSettingsInitialTab] = useState<string | undefined>()
   const [showMemberList, setShowMemberList] = useState(true)
+  const [messageIdToScroll, setMessageIdToScroll] = useState<string | null>(null)
 
   const {
     isInVoice,
@@ -63,34 +62,44 @@ export function MainLayout() {
 
   useEffect(() => {
     const hash = window.location.hash
+    const channelsMatch = hash.match(/^#channels\/([^/]+)\/([^/]+)\/([^/]+)$/)
+    if (channelsMatch && user) {
+      const [, serverIdFromHash, channelIdFromHash, messageIdFromHash] = channelsMatch
+      ;(async () => {
+        try {
+          const { channels } = await import('../lib/api')
+          const chList = await channels.list(serverIdFromHash)
+          const ch = (chList ?? []).find((c: { id: string }) => c.id === channelIdFromHash)
+          if (ch) {
+            setSelectedServerId(serverIdFromHash)
+            setSelectedChannel(ch)
+            setSelectedDmId(null)
+            setSelectedDmUser(null)
+            setMessageIdToScroll(messageIdFromHash)
+            window.history.replaceState(null, '', window.location.pathname)
+            setTimeout(() => setMessageIdToScroll(null), 3000)
+          }
+        } catch (_) {}
+      })()
+      return
+    }
     const m = hash.match(/^#invite\/([a-zA-Z0-9-]+)$/)
     if (!m || !user) return
     const code = m[1]
     ;(async () => {
       try {
-        if (backend) {
-          const data = await invites.getByCode(code)
-          if (data?.server_id) {
-            await servers.join(code)
-            setSelectedServerId(data.server_id)
-            setSelectedChannel(null)
-            setSelectedDmId(null)
-            setSelectedDmUser(null)
-          }
-        } else {
-          const { data } = await supabase.from('server_invites').select('server_id').eq('code', code).single()
-          if (data?.server_id) {
-            await supabase.rpc('join_server', { p_server_id: data.server_id })
-            setSelectedServerId(data.server_id)
-            setSelectedChannel(null)
-            setSelectedDmId(null)
-            setSelectedDmUser(null)
-          }
+        const data = await invites.getByCode(code)
+        if (data?.server_id) {
+          await servers.join(code)
+          setSelectedServerId(data.server_id)
+          setSelectedChannel(null)
+          setSelectedDmId(null)
+          setSelectedDmUser(null)
         }
       } catch (_) {}
       window.history.replaceState(null, '', window.location.pathname)
     })()
-  }, [user, backend])
+  }, [user])
 
   const [voiceServerName, setVoiceServerName] = useState<string | null>(null)
 
@@ -101,92 +110,32 @@ export function MainLayout() {
       return
     }
     const fetch = async () => {
-      if (backend && selectedServerId && selectedServerId !== FRIENDS_ID) {
-        try {
-          const { channels } = await import('../lib/api')
-          const chList = await channels.list(selectedServerId)
-          const ch = chList?.find((c) => c.id === currentChannelId)
-          if (ch) {
-            setVoiceChannelName(ch.name)
-            const srv = await servers.get(ch.server_id)
-            setVoiceServerName(srv?.name ?? null)
-          }
-        } catch {
-          setVoiceChannelName(null)
-          setVoiceServerName(null)
+      if (!selectedServerId || selectedServerId === FRIENDS_ID) return
+      try {
+        const chList = await channels.list(selectedServerId)
+        const ch = chList?.find((c) => c.id === currentChannelId)
+        if (ch) {
+          setVoiceChannelName(ch.name)
+          const srv = await servers.get(ch.server_id)
+          setVoiceServerName(srv?.name ?? null)
         }
-        return
-      }
-      const { data: ch } = await supabase
-        .from('channels')
-        .select('name, server_id')
-        .eq('id', currentChannelId)
-        .single()
-      if (ch) {
-        setVoiceChannelName(ch.name)
-        const { data: srv } = await supabase
-          .from('servers')
-          .select('name')
-          .eq('id', ch.server_id)
-          .single()
-        setVoiceServerName(srv?.name ?? null)
+      } catch {
+        setVoiceChannelName(null)
+        setVoiceServerName(null)
       }
     }
     fetch()
-  }, [currentChannelId, isInVoice, backend, selectedServerId])
+  }, [currentChannelId, isInVoice, selectedServerId])
 
-  const handleOpenDm = useCallback(
-    async (profile: Profile) => {
-      if (backend) {
-        try {
-          const { id } = await dm.createConversation(profile.id)
-          setSelectedServerId(FRIENDS_ID)
-          setSelectedChannel(null)
-          setSelectedDmId(id)
-          setSelectedDmUser(profile)
-        } catch (_) {}
-        return
-      }
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const { data: existing } = await supabase
-        .from('dm_participants')
-        .select('conversation_id')
-        .eq('user_id', user.id)
-
-      const convIds = (existing ?? []).map((c) => c.conversation_id)
-      if (convIds.length > 0) {
-        const { data: match } = await supabase
-          .from('dm_participants')
-          .select('conversation_id')
-          .eq('user_id', profile.id)
-          .in('conversation_id', convIds)
-          .limit(1)
-          .single()
-
-        if (match) {
-          setSelectedServerId(FRIENDS_ID)
-          setSelectedChannel(null)
-          setSelectedDmId(match.conversation_id)
-          setSelectedDmUser(profile)
-          return
-        }
-      }
-
-      const { data: newConvId, error } = await supabase.rpc('create_dm_conversation', {
-        other_user_id: profile.id,
-      })
-
-      if (!error && newConvId) {
-        setSelectedServerId(FRIENDS_ID)
-        setSelectedChannel(null)
-        setSelectedDmId(newConvId as string)
-        setSelectedDmUser(profile)
-      }
-    },
-    [backend]
-  )
+  const handleOpenDm = useCallback(async (profile: Profile) => {
+    try {
+      const { id } = await dm.createConversation(profile.id)
+      setSelectedServerId(FRIENDS_ID)
+      setSelectedChannel(null)
+      setSelectedDmId(id)
+      setSelectedDmUser(profile)
+    } catch (_) {}
+  }, [])
 
   return (
     <div className="h-screen flex flex-col bg-[var(--bg-primary)]">
@@ -267,13 +216,16 @@ export function MainLayout() {
                     : selectedChannel
               }
               serverId={selectedServerId}
+              messageIdToScroll={messageIdToScroll}
               onToggleMembers={() => setShowMemberList((p) => !p)}
               onOpenEmojiSettings={async (serverId) => {
-                const { data } = await supabase.from('servers').select('*').eq('id', serverId).single()
-                if (data) {
-                  setServerSettingsServer(data)
-                  setServerSettingsInitialTab('emoji')
-                }
+                try {
+                  const data = await servers.get(serverId)
+                  if (data) {
+                    setServerSettingsServer(data)
+                    setServerSettingsInitialTab('emoji')
+                  }
+                } catch (_) {}
               }}
             />
           )}
@@ -314,12 +266,10 @@ export function MainLayout() {
           }}
           initialTab={serverSettingsInitialTab as 'emoji' | undefined}
           onSaved={async () => {
-            const { data } = await supabase
-              .from('servers')
-              .select('*')
-              .eq('id', serverSettingsServer.id)
-              .single()
-            if (data) setServerSettingsServer(data)
+            try {
+              const data = await servers.get(serverSettingsServer.id)
+              if (data) setServerSettingsServer(data)
+            } catch (_) {}
           }}
         />
       )}

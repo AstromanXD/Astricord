@@ -3,9 +3,8 @@
  * 3-State: ✓ Erlauben | ✗ Verweigern | — Standard (von Rolle)
  */
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import type { ChannelPermissionOverwrite, ServerRole } from '../lib/supabase'
-import type { Profile } from '../lib/supabase'
+import { channels as apiChannels, servers as apiServers } from '../lib/api'
 import {
   PERMISSION_LABELS,
   TEXT_CHANNEL_PERMS,
@@ -90,54 +89,36 @@ export function ChannelPermissionsSection({
   }, [showAddDropdown])
 
   const fetchOverwrites = async () => {
-    const { data } = await supabase
-      .from('channel_permission_overwrites')
-      .select('*')
-      .eq('channel_id', channelId)
-    if (!data) return
-
-    const withTargets: OverwriteWithTarget[] = []
-    for (const ow of data) {
-      if (ow.role_id) {
-        const { data: role } = await supabase
-          .from('server_roles')
-          .select('name, color')
-          .eq('id', ow.role_id)
-          .single()
-        withTargets.push({ ...ow, targetName: role?.name ?? '?', targetColor: role?.color })
-      } else if (ow.user_id) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('username')
-          .eq('id', ow.user_id)
-          .single()
-        withTargets.push({ ...ow, targetName: (profile as Profile)?.username ?? '?' })
+    try {
+      const data = await apiChannels.getOverwrites(channelId)
+      const withTargets: OverwriteWithTarget[] = []
+      const detail = await apiServers.getMembersDetail(serverId)
+      const roleMap = Object.fromEntries((detail?.roles ?? []).map((r) => [r.id, r]))
+      const memberMap = Object.fromEntries((detail?.members ?? []).map((m) => [m.userId, m.profile?.username ?? '?']))
+      for (const ow of data ?? []) {
+        if (ow.role_id) {
+          const role = roleMap[ow.role_id]
+          withTargets.push({ ...ow, targetName: role?.name ?? '?', targetColor: role?.color })
+        } else if (ow.user_id) {
+          withTargets.push({ ...ow, targetName: memberMap[ow.user_id] ?? '?' })
+        }
       }
+      setOverwrites(withTargets)
+    } catch {
+      setOverwrites([])
     }
-    setOverwrites(withTargets)
   }
 
   const fetchRolesAndMembers = async () => {
-    const { data: rolesData } = await supabase
-      .from('server_roles')
-      .select('*')
-      .eq('server_id', serverId)
-      .order('position', { ascending: false })
-    setRoles(rolesData ?? [])
-
-    const { data: membersData } = await supabase
-      .from('server_members')
-      .select('user_id')
-      .eq('server_id', serverId)
-    const userIds = (membersData ?? []).map((m) => m.user_id)
-    if (userIds.length > 0) {
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('id, username')
-        .in('id', userIds)
+    try {
+      const detail = await apiServers.getMembersDetail(serverId)
+      setRoles((detail?.roles ?? []) as ServerRole[])
       setMembers(
-        (profiles ?? []).map((p) => ({ user_id: p.id, username: (p as { username: string }).username }))
+        (detail?.members ?? []).map((m) => ({ user_id: m.userId, username: m.profile?.username ?? '?' }))
       )
+    } catch {
+      setRoles([])
+      setMembers([])
     }
   }
 
@@ -149,23 +130,17 @@ export function ChannelPermissionsSection({
   const handleAddOverwrite = async (roleId?: string, userId?: string) => {
     const rid = roleId ?? addRoleId
     const uid = userId ?? addUserId
-    const isRole = rid != null
+    const isRole = !!rid
     if (!rid && !uid) return
     setLoading(true)
-    const { error } = await supabase.from('channel_permission_overwrites').insert({
-      channel_id: channelId,
-      role_id: isRole ? rid : null,
-      user_id: !isRole ? uid : null,
-      allow: 0,
-      deny: 0,
-    })
-    setLoading(false)
-    if (!error) {
+    try {
+      await apiChannels.addOverwrite(channelId, isRole ? { role_id: rid } : { user_id: uid! })
       setAddRoleId('')
       setAddUserId('')
       setShowAddDropdown(false)
       fetchOverwrites()
-    }
+    } catch (_) {}
+    setLoading(false)
   }
 
   const getPermState = (ow: OverwriteWithTarget, perm: number): PermState => {
@@ -179,37 +154,29 @@ export function ChannelPermissionsSection({
     perm: number,
     nextState: PermState
   ) => {
-    if (nextState === 'allow') {
-      await supabase
-        .from('channel_permission_overwrites')
-        .update({
-          allow: (ow.allow | perm),
-          deny: ow.deny & ~perm,
-        })
-        .eq('id', ow.id)
-    } else if (nextState === 'deny') {
-      await supabase
-        .from('channel_permission_overwrites')
-        .update({
-          deny: (ow.deny | perm),
-          allow: ow.allow & ~perm,
-        })
-        .eq('id', ow.id)
-    } else {
-      await supabase
-        .from('channel_permission_overwrites')
-        .update({
-          allow: ow.allow & ~perm,
-          deny: ow.deny & ~perm,
-        })
-        .eq('id', ow.id)
-    }
-    fetchOverwrites()
+    try {
+      if (nextState === 'allow') {
+        const allow = ow.allow | perm
+        const deny = ow.deny & ~perm
+        await apiChannels.updateOverwrite(channelId, ow.id, { allow, deny })
+      } else if (nextState === 'deny') {
+        const deny = ow.deny | perm
+        const allow = ow.allow & ~perm
+        await apiChannels.updateOverwrite(channelId, ow.id, { allow, deny })
+      } else {
+        const allow = ow.allow & ~perm
+        const deny = ow.deny & ~perm
+        await apiChannels.updateOverwrite(channelId, ow.id, { allow, deny })
+      }
+      fetchOverwrites()
+    } catch (_) {}
   }
 
   const handleRemoveOverwrite = async (id: string) => {
-    await supabase.from('channel_permission_overwrites').delete().eq('id', id)
-    fetchOverwrites()
+    try {
+      await apiChannels.deleteOverwrite(channelId, id)
+      fetchOverwrites()
+    } catch (_) {}
   }
 
   const usedRoleIds = overwrites.filter((o) => o.role_id).map((o) => o.role_id!)

@@ -3,8 +3,7 @@
  * Creator wird automatisch Server-Owner
  */
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
-import { useBackend, servers } from '../lib/api'
+import { servers } from '../lib/api'
 
 interface CreateServerModalProps {
   onClose: () => void
@@ -12,7 +11,6 @@ interface CreateServerModalProps {
 }
 
 export function CreateServerModal({ onClose, onCreated }: CreateServerModalProps) {
-  const backend = useBackend()
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -30,22 +28,10 @@ export function CreateServerModal({ onClose, onCreated }: CreateServerModalProps
     }
 
     try {
-      if (backend) {
-        const data = await servers.create({ name: trimmed })
-        if (data?.id) {
-          onCreated(data.id)
-          onClose()
-        }
-      } else {
-        const { data, error: err } = await supabase.rpc('create_server', {
-          p_name: trimmed,
-          p_icon_url: null,
-        })
-        if (err) throw err
-        if (data) {
-          onCreated(data as string)
-          onClose()
-        }
+      const data = await servers.create({ name: trimmed })
+      if (data?.id) {
+        onCreated(data.id)
+        onClose()
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Fehler beim Erstellen.')

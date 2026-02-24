@@ -56,10 +56,30 @@ CREATE TABLE IF NOT EXISTS channels (
   name VARCHAR(255) NOT NULL,
   type ENUM('text', 'voice', 'forum') NOT NULL DEFAULT 'text',
   position INT NOT NULL DEFAULT 0,
+  slow_mode_seconds INT NOT NULL DEFAULT 0,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
   FOREIGN KEY (category_id) REFERENCES channel_categories(id) ON DELETE SET NULL
 );
+
+-- Channel Permission Overwrites
+CREATE TABLE IF NOT EXISTS channel_permission_overwrites (
+  id CHAR(36) PRIMARY KEY,
+  channel_id CHAR(36) NOT NULL,
+  role_id CHAR(36) NULL,
+  user_id CHAR(36) NULL,
+  allow BIGINT NOT NULL DEFAULT 0,
+  deny BIGINT NOT NULL DEFAULT 0,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  CONSTRAINT chk_overwrite_target CHECK (
+    (role_id IS NOT NULL AND user_id IS NULL) OR
+    (role_id IS NULL AND user_id IS NOT NULL)
+  ),
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+  FOREIGN KEY (role_id) REFERENCES server_roles(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_overwrites_channel ON channel_permission_overwrites(channel_id);
 
 -- DM Conversations (vor messages, da messages darauf verweist)
 CREATE TABLE IF NOT EXISTS dm_conversations (
@@ -136,6 +156,7 @@ CREATE TABLE IF NOT EXISTS server_members (
   server_id CHAR(36) NOT NULL,
   user_id CHAR(36) NOT NULL,
   joined_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  timeout_until DATETIME(3) NULL,
   PRIMARY KEY (server_id, user_id),
   FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -158,9 +179,32 @@ CREATE TABLE IF NOT EXISTS server_invites (
   server_id CHAR(36) NOT NULL,
   code VARCHAR(50) NOT NULL UNIQUE,
   created_by CHAR(36),
+  expires_at DATETIME(3) NULL,
+  max_uses INT NULL,
+  uses INT NOT NULL DEFAULT 0,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
   FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Server Member Nicknames
+CREATE TABLE IF NOT EXISTS server_member_nicknames (
+  server_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  nickname VARCHAR(32) NOT NULL,
+  PRIMARY KEY (server_id, user_id),
+  FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- Channel Notification Settings
+CREATE TABLE IF NOT EXISTS channel_notification_settings (
+  channel_id CHAR(36) NOT NULL,
+  user_id CHAR(36) NOT NULL,
+  mute BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (channel_id, user_id),
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- Server Emojis

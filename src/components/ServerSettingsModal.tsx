@@ -3,7 +3,6 @@
  * Erweiterte Sidebar-Navigation, Serverprofil mit Vorschau
  */
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Server, ServerRole, ServerEmoji, Profile, ServerInvite, AuditLogEntry } from '../lib/supabase'
 import {
   hasPermission,
@@ -11,8 +10,9 @@ import {
   PERMISSION_GROUPS,
 } from '../lib/permissions'
 import { useServerPermissions } from '../hooks/useServerPermissions'
+import { useAuth } from '../contexts/AuthContext'
 import { useUserSettings } from '../contexts/UserSettingsContext'
-import { useBackend, servers, invites, emojis, uploadServerEmoji } from '../lib/api'
+import { servers, invites, emojis, uploadServerEmoji, uploadServerIcon } from '../lib/api'
 import { formatDateShort, formatDateTime } from '../lib/formatDate'
 
 const BANNER_COLORS = [
@@ -57,7 +57,7 @@ interface ServerSettingsModalProps {
 }
 
 export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: ServerSettingsModalProps) {
-  const backend = useBackend()
+  const { user } = useAuth()
   const { isOwner } = useServerPermissions(server.id)
   const { settings: userSettings } = useUserSettings()
   const [tab, setTab] = useState<Tab>(initialTab ?? 'serverprofil')
@@ -77,68 +77,45 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   const [memberCount, setMemberCount] = useState(0)
   const [emojis, setEmojis] = useState<ServerEmoji[]>([])
   const [emojiUploading, setEmojiUploading] = useState(false)
+  const [iconUploading, setIconUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [members, setMembers] = useState<{ profile: Profile; roles: ServerRole[] }[]>([])
   const [invites, setInvites] = useState<ServerInvite[]>([])
   const [inviteCode, setInviteCode] = useState('')
+  const [inviteExpires, setInviteExpires] = useState<string>('')
+  const [inviteMaxUses, setInviteMaxUses] = useState<string>('')
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([])
+  const [bans, setBans] = useState<{ user_id: string; username: string; avatar_url: string | null; banned_by: string | null; created_at: string }[]>([])
   const [roleEditTab, setRoleEditTab] = useState<'anzeige' | 'berechtigungen' | 'links' | 'mitglieder'>('anzeige')
 
   const fetchRoles = async () => {
-    if (backend) {
-      try {
-        const data = await servers.getRoles(server.id)
-        setRoles(data ?? [])
-        if (!selectedRole && (data?.length ?? 0) > 0) setSelectedRole(data?.[0] ?? null)
-      } catch {
-        setRoles([])
-      }
-      return
+    try {
+      const data = await servers.getRoles(server.id)
+      setRoles(data ?? [])
+      if (!selectedRole && (data?.length ?? 0) > 0) setSelectedRole(data?.[0] ?? null)
+    } catch {
+      setRoles([])
     }
-    const { data } = await supabase
-      .from('server_roles')
-      .select('*')
-      .eq('server_id', server.id)
-      .order('position', { ascending: false })
-    setRoles(data ?? [])
-    if (!selectedRole && (data?.length ?? 0) > 0) setSelectedRole(data?.[0] ?? null)
   }
 
   const fetchMemberCount = async () => {
-    if (backend) {
-      try {
-        const memberIds = await servers.getMembers(server.id)
-        setMemberCount(memberIds?.length ?? 0)
-      } catch {
-        setMemberCount(0)
-      }
-      return
+    try {
+      const memberIds = await servers.getMembers(server.id)
+      setMemberCount(memberIds?.length ?? 0)
+    } catch {
+      setMemberCount(0)
     }
-    const { count } = await supabase
-      .from('server_members')
-      .select('*', { count: 'exact', head: true })
-      .eq('server_id', server.id)
-    setMemberCount(count ?? 0)
   }
 
   const fetchEmojis = async () => {
-    if (backend) {
-      try {
-        const data = await emojis.list(server.id)
-        setEmojis(data ?? [])
-      } catch {
-        setEmojis([])
-      }
-      return
+    try {
+      const data = await emojis.list(server.id)
+      setEmojis(data ?? [])
+    } catch {
+      setEmojis([])
     }
-    const { data } = await supabase
-      .from('server_emojis')
-      .select('*')
-      .eq('server_id', server.id)
-      .order('created_at')
-    setEmojis(data ?? [])
   }
 
   useEffect(() => {
@@ -155,104 +132,65 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   }, [server.id])
 
   const fetchMembers = async () => {
-    if (backend) {
-      try {
-        const data = await servers.getMembersDetail(server.id)
-        setMembers((data?.members ?? []).map((m) => ({ profile: m.profile as Profile, roles: m.roles })))
-      } catch {
-        setMembers([])
-      }
-      return
-    }
-    const [membersRes, memberRolesRes, rolesRes] = await Promise.all([
-      supabase.from('server_members').select('user_id').eq('server_id', server.id),
-      supabase.from('server_member_roles').select('user_id, role_id').eq('server_id', server.id),
-      supabase.from('server_roles').select('*').eq('server_id', server.id),
-    ])
-    const memberIds = [...new Set((membersRes.data ?? []).map((m) => m.user_id))]
-    const rolesList = (rolesRes.data ?? []) as ServerRole[]
-    const roleMap = Object.fromEntries(rolesList.map((r) => [r.id, r]))
-    const rolesByUser = new Map<string, ServerRole[]>()
-    ;(memberRolesRes.data ?? []).forEach((mr) => {
-      const role = roleMap[mr.role_id]
-      if (role) {
-        const existing = rolesByUser.get(mr.user_id) ?? []
-        if (!existing.find((r) => r.id === role.id)) rolesByUser.set(mr.user_id, [...existing, role])
-      }
-    })
-    if (memberIds.length === 0) {
+    try {
+      const data = await servers.getMembersDetail(server.id)
+      setMembers((data?.members ?? []).map((m) => ({ profile: m.profile as Profile, roles: m.roles })))
+    } catch {
       setMembers([])
-      return
     }
-    const { data: profiles } = await supabase.from('profiles').select('*').in('id', memberIds)
-    const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
-    setMembers(
-      memberIds.map((uid) => ({
-        profile: profileMap[uid] ?? { id: uid, username: 'Unbekannt', avatar_url: null, theme: 'dark', created_at: '' },
-        roles: rolesByUser.get(uid) ?? [],
-      }))
-    )
   }
 
   const fetchInvites = async () => {
-    if (backend) {
-      try {
-        const data = await invites.list(server.id)
-        setInvites(data ?? [])
-      } catch {
-        setInvites([])
-      }
-      return
+    try {
+      const data = await invites.list(server.id)
+      setInvites(data ?? [])
+    } catch {
+      setInvites([])
     }
-    const { data } = await supabase.from('server_invites').select('*').eq('server_id', server.id).order('created_at', { ascending: false })
-    setInvites(data ?? [])
   }
 
   const fetchAuditLog = async () => {
-    if (backend) {
-      try {
-        const data = await servers.getAuditLog(server.id)
-        setAuditLog((data ?? []) as AuditLogEntry[])
-      } catch {
-        setAuditLog([])
-      }
-      return
+    try {
+      const data = await servers.getAuditLog(server.id)
+      setAuditLog((data ?? []) as AuditLogEntry[])
+    } catch {
+      setAuditLog([])
     }
-    const { data } = await supabase
-      .from('audit_log')
-      .select('*')
-      .eq('server_id', server.id)
-      .order('created_at', { ascending: false })
-      .limit(50)
-    setAuditLog((data ?? []) as AuditLogEntry[])
+  }
+
+  const fetchBans = async () => {
+    try {
+      const data = await servers.getBans(server.id)
+      setBans(data ?? [])
+    } catch {
+      setBans([])
+    }
   }
 
   useEffect(() => {
     if (tab === 'mitglieder') fetchMembers()
     if (tab === 'einladungen') fetchInvites()
     if (tab === 'audit-log') fetchAuditLog()
+    if (tab === 'gebannte-mitglieder') fetchBans()
   }, [tab, server.id])
 
   const createInvite = async () => {
-    if (backend) {
-      try {
-        const inv = await invites.create(server.id)
-        setInviteCode(`${window.location.origin}/#invite/${inv.code}`)
-        fetchInvites()
-      } catch (_) {}
-      return
-    }
-    const code = crypto.randomUUID().slice(0, 8)
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error: err } = await supabase.from('server_invites').insert({
-      server_id: server.id,
-      code,
-      created_by: user?.id ?? null,
-    })
-    if (!err) {
-      setInviteCode(`${window.location.origin}/#invite/${code}`)
+    try {
+      const opts: { expires_at?: string; max_uses?: number } = {}
+      if (inviteExpires) {
+        const h = parseInt(inviteExpires, 10) || 0
+        if (h > 0) opts.expires_at = new Date(Date.now() + h * 3600 * 1000).toISOString()
+      }
+      if (inviteMaxUses) {
+        const u = parseInt(inviteMaxUses, 10) || 0
+        if (u > 0) opts.max_uses = u
+      }
+      const inv = await invites.create(server.id, opts)
+      setInviteCode(`${window.location.origin}/#invite/${inv.code}`)
+      setInviteExpires('')
+      setInviteMaxUses('')
       fetchInvites()
-    }
+    } catch (_) {}
   }
 
   const copyInviteLink = (code: string) => {
@@ -263,58 +201,30 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
   const deleteServer = async () => {
     if (deleteConfirm !== server.name) return
     setError(null)
-    if (backend) {
-      try {
-        await servers.delete(server.id)
-        onSaved()
-        onClose()
-      } catch (e) {
-        setError((e as Error).message || 'Server konnte nicht gelöscht werden.')
-      }
-      return
-    }
-    const { error: err } = await supabase.from('servers').delete().eq('id', server.id)
-    if (!err) {
+    try {
+      await servers.delete(server.id)
       onSaved()
       onClose()
-    } else {
-      setError(err.message || 'Server konnte nicht gelöscht werden. Bist du Owner oder Admin?')
+    } catch (e) {
+      setError((e as Error).message || 'Server konnte nicht gelöscht werden.')
     }
   }
 
   const handleSaveProfile = async () => {
     setError(null)
     setLoading(true)
-    if (backend) {
-      try {
-        await servers.update(server.id, {
-          name: name.trim(),
-          icon_url: iconUrl.trim() || null,
-          description: description.trim() || null,
-          banner_color: bannerColor,
-        })
-        onSaved()
-      } catch (e) {
-        setError((e as Error).message)
-      }
-      setLoading(false)
-      return
-    }
-    const { error: err } = await supabase
-      .from('servers')
-      .update({
+    try {
+      await servers.update(server.id, {
         name: name.trim(),
         icon_url: iconUrl.trim() || null,
         description: description.trim() || null,
         banner_color: bannerColor,
       })
-      .eq('id', server.id)
-    setLoading(false)
-    if (err) {
-      setError(err.message)
-    } else {
       onSaved()
+    } catch (e) {
+      setError((e as Error).message)
     }
+    setLoading(false)
   }
 
   const handleCreateRole = async (name?: string, color?: string) => {
@@ -323,58 +233,26 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
     if (!roleName) return
     setError(null)
     setLoading(true)
-    if (backend) {
-      try {
-        const created = await servers.createRole(server.id, { name: roleName, color: roleColor })
-        setNewRoleName('')
-        setNewRoleColor('#99aab5')
-        await fetchRoles()
-        if (created) setSelectedRole(created as ServerRole)
-      } catch (e) {
-        setError((e as Error).message)
-      }
-      setLoading(false)
-      return
-    }
-    const maxPos = Math.max(0, ...roles.map((r) => r.position))
-    const { data: created, error: err } = await supabase.from('server_roles').insert({
-      server_id: server.id,
-      name: roleName,
-      color: roleColor,
-      position: maxPos + 1,
-      permissions: 3147264,
-    }).select().single()
-    setLoading(false)
-    if (err) {
-      setError(err.message)
-    } else {
+    try {
+      const created = await servers.createRole(server.id, { name: roleName, color: roleColor })
       setNewRoleName('')
       setNewRoleColor('#99aab5')
       await fetchRoles()
       if (created) setSelectedRole(created as ServerRole)
+    } catch (e) {
+      setError((e as Error).message)
     }
+    setLoading(false)
   }
 
   const handleUpdateRole = async (role: ServerRole, updates: Partial<ServerRole>) => {
     setError(null)
-    if (backend) {
-      try {
-        await servers.updateRole(server.id, role.id, updates)
-        setSelectedRole((prev) => (prev?.id === role.id ? { ...prev, ...updates } : prev))
-        fetchRoles()
-      } catch (e) {
-        setError((e as Error).message)
-      }
-      return
-    }
-    const { error: err } = await supabase
-      .from('server_roles')
-      .update(updates)
-      .eq('id', role.id)
-    if (err) setError(err.message)
-    else {
+    try {
+      await servers.updateRole(server.id, role.id, updates)
       setSelectedRole((prev) => (prev?.id === role.id ? { ...prev, ...updates } : prev))
       fetchRoles()
+    } catch (e) {
+      setError((e as Error).message)
     }
   }
 
@@ -394,21 +272,12 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
       return
     }
     setError(null)
-    if (backend) {
-      try {
-        await servers.deleteRole(server.id, role.id)
-        setSelectedRole(null)
-        fetchRoles()
-      } catch (e) {
-        setError((e as Error).message)
-      }
-      return
-    }
-    const { error: err } = await supabase.from('server_roles').delete().eq('id', role.id)
-    if (err) setError(err.message)
-    else {
+    try {
+      await servers.deleteRole(server.id, role.id)
       setSelectedRole(null)
       fetchRoles()
+    } catch (e) {
+      setError((e as Error).message)
     }
   }
 
@@ -419,50 +288,18 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
     setError(null)
     setEmojiUploading(true)
 
-    if (backend) {
-      for (const file of fileList) {
-        const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
-        if (!['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) continue
-        const emojiName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 32) || 'emoji'
-        const url = await uploadServerEmoji(file)
-        if (url) {
-          try {
-            await emojis.create(server.id, emojiName, url)
-          } catch (e) {
-            setError((e as Error).message)
-          }
-        }
-      }
-      setEmojiUploading(false)
-      fetchEmojis()
-      return
-    }
-
     for (const file of fileList) {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
-      const validExt = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)
-      if (!validExt) continue
-
+      if (!['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) continue
       const emojiName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 32) || 'emoji'
-      const path = `${server.id}/${crypto.randomUUID()}.${ext}`
-
-      const { error: uploadErr } = await supabase.storage
-        .from('server-emojis')
-        .upload(path, file, { upsert: false })
-
-      if (uploadErr) {
-        setError(uploadErr.message)
-        continue
+      const url = await uploadServerEmoji(file)
+      if (url) {
+        try {
+          await emojis.create(server.id, emojiName, url)
+        } catch (e) {
+          setError((e as Error).message)
+        }
       }
-
-      const { data: urlData } = supabase.storage.from('server-emojis').getPublicUrl(path)
-      const { error: insertErr } = await supabase.from('server_emojis').insert({
-        server_id: server.id,
-        name: emojiName,
-        image_url: urlData.publicUrl,
-      })
-
-      if (insertErr) setError(insertErr.message)
     }
 
     setEmojiUploading(false)
@@ -471,38 +308,23 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
 
   const handleDeleteEmoji = async (emoji: ServerEmoji) => {
     setError(null)
-    if (backend) {
-      try {
-        await emojis.delete(emoji.id)
-        fetchEmojis()
-      } catch (e) {
-        setError((e as Error).message)
-      }
-      return
+    try {
+      await emojis.delete(emoji.id)
+      fetchEmojis()
+    } catch (e) {
+      setError((e as Error).message)
     }
-    const { error: err } = await supabase.from('server_emojis').delete().eq('id', emoji.id)
-    if (err) setError(err.message)
-    else fetchEmojis()
   }
 
   const handleRemoveIcon = async () => {
     setIconUrl('')
     setError(null)
     setLoading(true)
-    if (backend) {
-      try {
-        await servers.update(server.id, { icon_url: null })
-        onSaved()
-      } catch (_) {}
-      setLoading(false)
-      return
-    }
-    const { error: err } = await supabase
-      .from('servers')
-      .update({ icon_url: null })
-      .eq('id', server.id)
+    try {
+      await servers.update(server.id, { icon_url: null })
+      onSaved()
+    } catch (_) {}
     setLoading(false)
-    if (!err) onSaved()
   }
 
   const createdDate = server.created_at
@@ -657,20 +479,39 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                       <p className="text-xs text-[var(--text-muted)] mb-2">
                         Wir empfehlen ein Bild von mindestens 512x512 px.
                       </p>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2 items-center">
                         <input
                           type="url"
                           value={iconUrl}
                           onChange={(e) => setIconUrl(e.target.value)}
-                          className="flex-1 px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] text-sm"
+                          className="flex-1 min-w-[200px] px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)] text-sm"
                           placeholder="https://..."
                         />
+                        <label className="px-4 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] hover:bg-[var(--bg-modifier-hover)] text-sm font-medium cursor-pointer disabled:opacity-50">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0]
+                              if (!file || iconUploading) return
+                              setIconUploading(true)
+                              try {
+                                const url = await uploadServerIcon(file)
+                                if (url) setIconUrl(url)
+                              } catch (_) {}
+                              setIconUploading(false)
+                              e.target.value = ''
+                            }}
+                          />
+                          {iconUploading ? 'Hochladen…' : 'Hochladen'}
+                        </label>
                         <button
                           onClick={handleSaveProfile}
                           disabled={loading}
                           className="px-4 py-2.5 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm font-medium disabled:opacity-50"
                         >
-                          Server-Icon ändern
+                          Speichern
                         </button>
                         <button
                           onClick={handleRemoveIcon}
@@ -1148,6 +989,37 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                   <p className="text-sm text-[var(--text-muted)] mb-6">
                     {memberCount} Mitglieder auf diesem Server
                   </p>
+                  {isOwner && members.length > 1 && (
+                    <div className="mb-6 p-4 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)]">
+                      <h4 className="text-sm font-medium text-[var(--text-primary)] mb-2">Besitzrechte übertragen</h4>
+                      <p className="text-xs text-[var(--text-muted)] mb-3">
+                        Übertrage den Server an ein anderes Mitglied. Du verlierst den Owner-Status.
+                      </p>
+                      <div className="flex gap-2">
+                        <select
+                          className="flex-1 px-3 py-2 rounded bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] text-sm"
+                          onChange={async (e) => {
+                            const uid = e.target.value
+                            if (!uid) return
+                            if (!confirm(`Besitzrechte wirklich an ${members.find((m) => m.profile.id === uid)?.profile.username} übertragen?`)) return
+                            try {
+                              await servers.transferOwnership(server.id, uid)
+                              onSaved()
+                              onClose()
+                            } catch (_) {}
+                            e.target.value = ''
+                          }}
+                        >
+                          <option value="">Mitglied wählen…</option>
+                          {members.filter((m) => m.profile.id !== user?.id).map((m) => (
+                            <option key={m.profile.id} value={m.profile.id}>
+                              {m.profile.username}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     {members.map(({ profile, roles }) => (
                       <div
@@ -1191,6 +1063,30 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                   <p className="text-sm text-[var(--text-muted)] mb-6">
                     Erstelle Einladungslinks, damit andere deinem Server beitreten können.
                   </p>
+                  <div className="mb-4 space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-[var(--text-muted)] mb-1">Ablauf (Stunden, leer = nie)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="z.B. 24"
+                        value={inviteExpires}
+                        onChange={(e) => setInviteExpires(e.target.value)}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[var(--text-muted)] mb-1">Max. Nutzungen (leer = unbegrenzt)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="z.B. 5"
+                        value={inviteMaxUses}
+                        onChange={(e) => setInviteMaxUses(e.target.value)}
+                        className="w-full px-3 py-2 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] text-sm"
+                      />
+                    </div>
+                  </div>
                   <button
                     onClick={createInvite}
                     className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium mb-4"
@@ -1212,17 +1108,47 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                     <div>
                       <h4 className="text-sm font-medium text-[var(--text-primary)] mb-2">Aktive Einladungen</h4>
                       <div className="space-y-2">
-                        {invites.map((inv) => (
-                          <div key={inv.id} className="flex items-center justify-between px-3 py-2 rounded bg-[var(--bg-tertiary)]">
-                            <code className="text-sm text-[var(--text-muted)]">{inv.code}</code>
-                            <button
-                              onClick={() => copyInviteLink(inv.code)}
-                              className="text-sm text-[var(--accent)] hover:underline"
-                            >
-                              Link kopieren
-                            </button>
-                          </div>
-                        ))}
+                        {invites.map((inv) => {
+                          const invWithMeta = inv as { expires_at?: string; max_uses?: number; uses?: number }
+                          const expired = invWithMeta.expires_at && new Date(invWithMeta.expires_at) < new Date()
+                          const usedUp = invWithMeta.max_uses != null && (invWithMeta.uses ?? 0) >= invWithMeta.max_uses
+                          return (
+                            <div key={inv.id} className="flex items-center justify-between gap-2 px-3 py-2 rounded bg-[var(--bg-tertiary)]">
+                              <div className="min-w-0 flex-1">
+                                <code className="text-sm text-[var(--text-muted)]">{inv.code}</code>
+                                {(invWithMeta.expires_at || invWithMeta.max_uses != null) && (
+                                  <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                                    {invWithMeta.expires_at && `Ablauf: ${formatDateTime(invWithMeta.expires_at)}`}
+                                    {invWithMeta.expires_at && invWithMeta.max_uses != null && ' · '}
+                                    {invWithMeta.max_uses != null && `Nutzer: ${invWithMeta.uses ?? 0}/${invWithMeta.max_uses}`}
+                                    {(expired || usedUp) && (
+                                      <span className="text-[var(--accent-danger)] ml-1">(ungültig)</span>
+                                    )}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex gap-1 flex-shrink-0">
+                                <button
+                                  onClick={() => copyInviteLink(inv.code)}
+                                  className="text-sm text-[var(--accent)] hover:underline"
+                                >
+                                  Kopieren
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      await invites.delete(inv.id)
+                                      fetchInvites()
+                                    } catch (_) {}
+                                  }}
+                                  className="text-sm text-[var(--accent-danger)] hover:underline"
+                                >
+                                  Widerrufen
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   )}
@@ -1266,6 +1192,56 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                 </div>
               )}
 
+              {tab === 'gebannte-mitglieder' && (
+                <div className="p-6 max-w-xl">
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-1">Gebannte Mitglieder</h3>
+                  <p className="text-sm text-[var(--text-muted)] mb-6">
+                    Mitglieder, die von diesem Server gebannt wurden. Du kannst sie hier entbannen.
+                  </p>
+                  {bans.length === 0 ? (
+                    <p className="text-sm text-[var(--text-muted)]">Keine gebannten Mitglieder.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {bans.map((b) => (
+                        <div
+                          key={b.user_id}
+                          className="flex items-center justify-between gap-3 px-3 py-2 rounded bg-[var(--bg-tertiary)]"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-10 h-10 rounded-full overflow-hidden bg-[var(--bg-secondary)] flex-shrink-0">
+                              {b.avatar_url ? (
+                                <img src={b.avatar_url} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-lg font-bold text-[var(--text-muted)]">
+                                  {b.username.charAt(0).toUpperCase()}
+                                </div>
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium text-[var(--text-primary)] truncate">{b.username}</p>
+                              <p className="text-xs text-[var(--text-muted)]">
+                                Gebannt am {formatDateTime(b.created_at)}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await servers.unbanMember(server.id, b.user_id)
+                                fetchBans()
+                              } catch (_) {}
+                            }}
+                            className="px-3 py-1.5 rounded text-sm font-medium text-[var(--accent-danger)] hover:bg-[var(--accent-danger)]/10"
+                          >
+                            Entbannen
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {tab === 'audit-log' && (
                 <div className="p-6 max-w-xl">
                   <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-4">Audit-Log</h3>
@@ -1304,7 +1280,7 @@ export function ServerSettingsModal({ server, onClose, onSaved, initialTab }: Se
                 </div>
               )}
 
-              {!['serverprofil', 'rollen', 'emoji', 'mitglieder', 'einladungen', 'server-loeschen', 'audit-log'].includes(tab) && (
+              {!['serverprofil', 'rollen', 'emoji', 'mitglieder', 'einladungen', 'server-loeschen', 'audit-log', 'gebannte-mitglieder'].includes(tab) && (
                 <div className="p-6 flex flex-col items-center justify-center min-h-[200px] text-center text-[var(--text-muted)]">
                   <p className="text-sm">Dieser Bereich wird bald verfügbar sein.</p>
                 </div>

@@ -2,9 +2,8 @@
  * ThreadPanel - Antwort-Thread zu einer Nachricht (Discord-Style)
  */
 import { useEffect, useState, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Message, Profile } from '../lib/supabase'
-import { useBackend, useBackendRealtime, messages } from '../lib/api'
+import { useBackendRealtime, messages } from '../lib/api'
 import { Message as MessageComponent } from './Message'
 import { useAuth } from '../contexts/AuthContext'
 import { useServerEmojis } from '../hooks/useServerEmojis'
@@ -29,7 +28,6 @@ export function ThreadPanel({
   onOpenEmojiSettings,
 }: ThreadPanelProps) {
   const { user, profile } = useAuth()
-  const backend = useBackend()
   const serverEmojis = useServerEmojis(serverId)
   const [replies, setReplies] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -40,7 +38,7 @@ export function ThreadPanel({
   const memberUserIds = [...new Set([parentMessage.user_id, ...replies.map((r) => r.user_id)])]
   const memberRoleColors = useMemberRoleColors(serverId, memberUserIds)
 
-  const wsChannel = backend ? `messages:${channelId}` : null
+  const wsChannel = `messages:${channelId}`
   useBackendRealtime(wsChannel, (event, payload) => {
     const msg = payload as Message
     if (event === 'INSERT' && msg.parent_message_id === parentMessage.id) setReplies((prev) => [...prev, msg])
@@ -48,37 +46,15 @@ export function ThreadPanel({
 
   useEffect(() => {
     const fetchReplies = async () => {
-      if (backend) {
-        try {
-          const data = await messages.getByChannel(channelId, 50, undefined, parentMessage.id)
-          setReplies(data ?? [])
-        } catch {
-          setReplies([])
-        }
-        return
+      try {
+        const data = await messages.getByChannel(channelId, 50, undefined, parentMessage.id)
+        setReplies(data ?? [])
+      } catch {
+        setReplies([])
       }
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('parent_message_id', parentMessage.id)
-        .order('created_at', { ascending: true })
-      setReplies(data ?? [])
     }
     fetchReplies()
-
-    if (backend) return
-    const sub = supabase
-      .channel(`thread:${parentMessage.id}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `parent_message_id=eq.${parentMessage.id}` },
-        (payload) => {
-          setReplies((prev) => [...prev, payload.new as Message])
-        }
-      )
-      .subscribe()
-    return () => sub.unsubscribe()
-  }, [parentMessage.id, channelId, backend])
+  }, [parentMessage.id, channelId])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -90,22 +66,13 @@ export function ThreadPanel({
     setSending(true)
     const content = input.trim()
     setInput('')
-    if (backend) {
-      try {
-        await messages.create({
-          channel_id: channelId,
-          content,
-          parent_message_id: parentMessage.id,
-        })
-      } catch (_) {}
-    } else {
-      await supabase.from('messages').insert({
+    try {
+      await messages.create({
         channel_id: channelId,
-        parent_message_id: parentMessage.id,
-        user_id: user.id,
         content,
+        parent_message_id: parentMessage.id,
       })
-    }
+    } catch (_) {}
     setSending(false)
   }
 

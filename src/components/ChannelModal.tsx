@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from 'react'
 import type { Channel, ChannelType } from '../lib/supabase'
-import { useBackend, channels as apiChannels } from '../lib/api'
+import { channels as apiChannels } from '../lib/api'
 import { ChannelPermissionsSection } from './ChannelPermissionsSection'
 
 interface ChannelModalProps {
@@ -18,9 +18,11 @@ interface ChannelModalProps {
 type Tab = 'uebersicht' | 'berechtigungen'
 
 export function ChannelModal({ serverId, channel, onClose, onSaved, onDeleted }: ChannelModalProps) {
-  const backend = useBackend()
   const [name, setName] = useState('')
   const [type, setType] = useState<ChannelType>('text')
+  const [categoryId, setCategoryId] = useState<string | null>(null)
+  const [categories, setCategories] = useState<{ id: string; name: string }[]>([])
+  const [slowModeSeconds, setSlowModeSeconds] = useState(0)
   const [tab, setTab] = useState<Tab>('uebersicht')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -32,8 +34,22 @@ export function ChannelModal({ serverId, channel, onClose, onSaved, onDeleted }:
     if (channel) {
       setName(channel.name)
       setType(channel.type)
+      setCategoryId((channel as { category_id?: string | null }).category_id ?? null)
+      setSlowModeSeconds((channel as { slow_mode_seconds?: number }).slow_mode_seconds ?? 0)
     }
   }, [channel])
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const data = await apiChannels.listCategories(serverId)
+        setCategories((data ?? []).map((c) => ({ id: c.id, name: c.name })))
+      } catch {
+        setCategories([])
+      }
+    }
+    load()
+  }, [serverId])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -48,26 +64,10 @@ export function ChannelModal({ serverId, channel, onClose, onSaved, onDeleted }:
     }
 
     try {
-      if (backend) {
-        if (isEdit) {
-          await apiChannels.update(channel.id, { name: trimmed, type })
-        } else {
-          await apiChannels.create({ server_id: serverId, name: trimmed, type })
-        }
+      if (isEdit) {
+        await apiChannels.update(channel.id, { name: trimmed, type, category_id: categoryId, slow_mode_seconds: slowModeSeconds })
       } else {
-        const { supabase } = await import('../lib/supabase')
-        if (isEdit) {
-          const { error: err } = await supabase
-            .from('channels')
-            .update({ name: trimmed, type })
-            .eq('id', channel.id)
-          if (err) throw err
-        } else {
-          const { error: err } = await supabase
-            .from('channels')
-            .insert({ server_id: serverId, name: trimmed, type })
-          if (err) throw err
-        }
+        await apiChannels.create({ server_id: serverId, name: trimmed, type, category_id: categoryId ?? undefined })
       }
       onSaved()
       onClose()
@@ -151,6 +151,23 @@ export function ChannelModal({ serverId, channel, onClose, onSaved, onDeleted }:
           <div className="flex-1 overflow-y-auto p-6">
             {tab === 'uebersicht' && (
               <form onSubmit={handleSubmit} className="space-y-6">
+                {categories.length > 0 && (
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-2">
+                      Kategorie
+                    </label>
+                    <select
+                      value={categoryId ?? ''}
+                      onChange={(e) => setCategoryId(e.target.value || null)}
+                      className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    >
+                      <option value="">Ohne Kategorie</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-2">
                     Kanalname
@@ -221,6 +238,28 @@ export function ChannelModal({ serverId, channel, onClose, onSaved, onDeleted }:
                   </div>
                 </div>
 
+                {(type === 'text' || type === 'forum') && isEdit && (
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-2">
+                      Slow-Modus
+                    </label>
+                    <p className="text-xs text-[var(--text-muted)] mb-2">
+                      Mitglieder müssen zwischen Nachrichten warten. 0 = aus.
+                    </p>
+                    <select
+                      value={slowModeSeconds}
+                      onChange={(e) => setSlowModeSeconds(parseInt(e.target.value, 10))}
+                      className="w-full px-3 py-2.5 rounded bg-[var(--bg-tertiary)] border border-[var(--border)] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent)]"
+                    >
+                      {[0, 5, 10, 15, 30, 60, 120, 300, 600].map((s) => (
+                        <option key={s} value={s}>
+                          {s === 0 ? 'Aus' : `${s} Sekunden`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 {error && <p className="text-[var(--accent-danger)] text-sm">{error}</p>}
 
                 {deleteConfirm ? (
@@ -241,25 +280,14 @@ export function ChannelModal({ serverId, channel, onClose, onSaved, onDeleted }:
                         onClick={async () => {
                           if (!channel) return
                           setLoading(true)
-                          if (backend) {
-                            try {
-                              await apiChannels.delete(channel.id)
-                              setLoading(false)
-                              onDeleted?.()
-                              onClose()
-                            } catch {
-                              setLoading(false)
-                            }
-                          } else {
-                            const { supabase } = await import('../lib/supabase')
-                            const { error: err } = await supabase.from('channels').delete().eq('id', channel.id)
+                          try {
+                            await apiChannels.delete(channel.id)
+                            onDeleted?.()
+                            onClose()
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : 'Fehler beim Löschen.')
+                          } finally {
                             setLoading(false)
-                            if (!err) {
-                              onDeleted?.()
-                              onClose()
-                            } else {
-                              setError(err.message)
-                            }
                           }
                         }}
                         disabled={loading}

@@ -2,9 +2,8 @@
  * DmChat - Private Chat (Direktnachrichten)
  */
 import { useEffect, useState, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Message, Profile } from '../lib/supabase'
-import { useBackend, useBackendRealtime, messages, getProfilesByIds } from '../lib/api'
+import { useBackendRealtime, messages, getProfilesByIds } from '../lib/api'
 import { Message as MessageComponent } from './Message'
 import { InviteToServerModalFromDm } from './InviteToServerModalFromDm'
 import { useAuth } from '../contexts/AuthContext'
@@ -17,7 +16,6 @@ interface DmChatProps {
 
 export function DmChat({ conversationId, otherUser }: DmChatProps) {
   const { user, profile } = useAuth()
-  const backend = useBackend()
   const [messages, setMessages] = useState<Message[]>([])
   const [profiles, setProfiles] = useState<Record<string, Profile>>({})
   const [input, setInput] = useState('')
@@ -26,7 +24,7 @@ export function DmChat({ conversationId, otherUser }: DmChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const wsChannel = conversationId ? `messages:dm:${conversationId}` : null
-  useBackendRealtime(backend ? wsChannel : null, (event, payload) => {
+  useBackendRealtime(wsChannel, (event, payload) => {
     const msg = payload as Message
     if (event === 'INSERT') {
       setMessages((prev) => {
@@ -45,78 +43,19 @@ export function DmChat({ conversationId, otherUser }: DmChatProps) {
       return
     }
 
-    if (backend) {
-      messages.getByDm(conversationId).then((data) => setMessages(data ?? []))
-      return
-    }
-
-    const fetchMessages = async () => {
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('dm_conversation_id', conversationId)
-        .order('created_at', { ascending: true })
-      setMessages(data ?? [])
-    }
-    fetchMessages()
-
-    const channelSub = supabase
-      .channel(`dms:${conversationId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `dm_conversation_id=eq.${conversationId}` },
-        (payload) => {
-          const msg = payload.new as Message
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === msg.id)) return prev
-            if (msg.user_id !== user?.id) playSoundMessage()
-            return [...prev, msg]
-          })
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `dm_conversation_id=eq.${conversationId}` },
-        (payload) => {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === (payload.new as Message).id ? (payload.new as Message) : m))
-          )
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'messages', filter: `dm_conversation_id=eq.${conversationId}` },
-        (payload) => {
-          setMessages((prev) => prev.filter((m) => m.id !== (payload.old as { id: string }).id))
-        }
-      )
-      .subscribe()
-
-    return () => channelSub.unsubscribe()
-  }, [conversationId, backend])
+    messages.getByDm(conversationId).then((data) => setMessages(data ?? []))
+  }, [conversationId])
 
   useEffect(() => {
     const userIds = [...new Set(messages.map((m) => m.user_id))]
     if (userIds.length === 0) return
 
-    if (backend) {
-      getProfilesByIds(userIds).then((data) => {
-        const map: Record<string, Profile> = {}
-        data?.forEach((p) => (map[p.id] = p))
-        setProfiles(map)
-      })
-    } else {
-      supabase
-        .from('profiles')
-        .select('*')
-        .in('id', userIds)
-        .then(({ data }) => {
-          const map: Record<string, Profile> = {}
-          data?.forEach((p) => (map[p.id] = p))
-          setProfiles(map)
-        })
-    }
-  }, [messages, backend])
+    getProfilesByIds(userIds).then((data) => {
+      const map: Record<string, Profile> = {}
+      data?.forEach((p) => (map[p.id] = p))
+      setProfiles(map)
+    })
+  }, [messages])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -130,52 +69,28 @@ export function DmChat({ conversationId, otherUser }: DmChatProps) {
     if (!contentOverride) setInput('')
     setSending(true)
 
-    if (backend) {
-      try {
-        const newMessage = await messages.create({
-          dm_conversation_id: conversationId,
-          content,
-        })
-        if (newMessage) {
-          setMessages((prev) => [...prev, newMessage])
-          setProfiles((prev) =>
-            profile && !prev[user.id] ? { ...prev, [user.id]: profile } : prev
-          )
-        }
-      } catch (_) {}
-    } else {
-      const { data: newMessage } = await supabase
-        .from('messages')
-        .insert({
-          dm_conversation_id: conversationId,
-          user_id: user.id,
-          content,
-        })
-        .select()
-        .single()
-
+    try {
+      const newMessage = await messages.create({
+        dm_conversation_id: conversationId,
+        content,
+      })
       if (newMessage) {
-        setMessages((prev) => [...prev, newMessage as Message])
+        setMessages((prev) => [...prev, newMessage])
         setProfiles((prev) =>
           profile && !prev[user.id] ? { ...prev, [user.id]: profile } : prev
         )
       }
-    }
+    } catch (_) {}
 
     setSending(false)
   }
 
   const handleDeleteMessage = async (msg: Message) => {
     if (msg.user_id !== user?.id) return
-    if (backend) {
-      try {
-        await messages.delete(msg.id)
-        setMessages((prev) => prev.filter((m) => m.id !== msg.id))
-      } catch (_) {}
-    } else {
-      await supabase.from('messages').delete().eq('id', msg.id)
+    try {
+      await messages.delete(msg.id)
       setMessages((prev) => prev.filter((m) => m.id !== msg.id))
-    }
+    } catch (_) {}
   }
 
   const handleInviteSent = (inviteUrl: string) => {

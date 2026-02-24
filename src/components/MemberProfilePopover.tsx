@@ -2,8 +2,7 @@
  * MemberProfilePopover - Discord-Style Profil-Popup bei Linksklick auf Mitglied
  */
 import { useEffect, useRef, useState } from 'react'
-import { supabase } from '../lib/supabase'
-import { useBackend, api } from '../lib/api'
+import { api } from '../lib/api'
 import type { Profile, ServerRole } from '../lib/supabase'
 
 interface MemberProfilePopoverProps {
@@ -27,7 +26,6 @@ export function MemberProfilePopover({
   onOpenDm,
   anchorRef,
 }: MemberProfilePopoverProps) {
-  const backend = useBackend()
   const popoverRef = useRef<HTMLDivElement>(null)
   const [voiceChannel, setVoiceChannel] = useState<{ id: string; name: string } | null>(null)
 
@@ -51,36 +49,17 @@ export function MemberProfilePopover({
 
   useEffect(() => {
     const fetchVoiceSession = async () => {
-      if (backend) {
-        try {
-          const data = await api<{ channel_id: string; channel_name: string } | null>(
-            `/api/voice/user/${member.userId}/session`
-          )
-          if (data) setVoiceChannel({ id: data.channel_id, name: data.channel_name })
-        } catch {
-          setVoiceChannel(null)
-        }
-        return
-      }
-      const { data: session } = await supabase
-        .from('voice_sessions')
-        .select('channel_id')
-        .eq('user_id', member.userId)
-        .maybeSingle()
-      if (!session?.channel_id) {
+      try {
+        const data = await api<{ channel_id: string; channel_name: string } | null>(
+          `/api/voice/user/${member.userId}/session`
+        )
+        if (data) setVoiceChannel({ id: data.channel_id, name: data.channel_name })
+      } catch {
         setVoiceChannel(null)
-        return
       }
-      const { data: ch } = await supabase
-        .from('channels')
-        .select('name')
-        .eq('id', session.channel_id)
-        .single()
-      if (ch) setVoiceChannel({ id: session.channel_id, name: ch.name })
-      else setVoiceChannel(null)
     }
     fetchVoiceSession()
-  }, [member.userId, backend])
+  }, [member.userId])
 
   useEffect(() => {
     const el = popoverRef.current

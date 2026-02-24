@@ -46,19 +46,49 @@ interface MessageProps {
   serverEmojisForPicker?: ServerEmoji[]
   serverNameForPicker?: string
   onOpenEmojiSettings?: () => void
+  onCopyLink?: () => void
 }
 
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/g
+const MENTION_REGEX = /@(everyone|here|[a-zA-Z0-9_]{2,})/g
 
-function linkify(text: string, keyPrefix: string): React.ReactNode[] {
+function mentionify(text: string, keyPrefix: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match
+  const re = new RegExp(MENTION_REGEX.source, 'g')
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index))
+    }
+    const mention = match[1]
+    const isSpecial = mention === 'everyone' || mention === 'here'
+    parts.push(
+      <span
+        key={`${keyPrefix}-m-${match.index}`}
+        className={`inline px-1 rounded ${isSpecial ? 'bg-[var(--accent)]/30 text-[var(--accent)]' : 'bg-[var(--accent)]/20 text-[var(--text-link)]'}`}
+      >
+        @{mention}
+      </span>
+    )
+    lastIndex = re.lastIndex
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+  return parts.length > 0 ? parts : [text]
+}
+
+function linkifyAndMentionify(text: string, keyPrefix: string): React.ReactNode[] {
+  if (!text) return []
   const parts: React.ReactNode[] = []
   let lastIndex = 0
   let match
   const re = new RegExp(URL_REGEX.source, 'g')
   while ((match = re.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index))
+      parts.push(...mentionify(text.slice(lastIndex, match.index), `${keyPrefix}-${lastIndex}`))
     }
     parts.push(
       <a
@@ -74,9 +104,13 @@ function linkify(text: string, keyPrefix: string): React.ReactNode[] {
     lastIndex = re.lastIndex
   }
   if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex))
+    parts.push(...mentionify(text.slice(lastIndex), `${keyPrefix}-${lastIndex}`))
   }
   return parts.length > 0 ? parts : [text]
+}
+
+function linkify(text: string, keyPrefix: string): React.ReactNode[] {
+  return linkifyAndMentionify(text, keyPrefix)
 }
 
 function renderContent(content: string, serverEmojis: ServerEmoji[] = []) {
@@ -87,7 +121,7 @@ function renderContent(content: string, serverEmojis: ServerEmoji[] = []) {
   let match
   while ((match = regex.exec(content)) !== null) {
     if (match.index > lastIndex) {
-      parts.push(...linkify(content.slice(lastIndex, match.index), `t-${match.index}`))
+      parts.push(...linkifyAndMentionify(content.slice(lastIndex, match.index), `t-${match.index}`))
     }
     const emoji = emojiMap[match[1].toLowerCase()]
     if (emoji) {
@@ -106,12 +140,12 @@ function renderContent(content: string, serverEmojis: ServerEmoji[] = []) {
     lastIndex = regex.lastIndex
   }
   if (lastIndex < content.length) {
-    parts.push(...linkify(content.slice(lastIndex), `e-${lastIndex}`))
+    parts.push(...linkifyAndMentionify(content.slice(lastIndex), `e-${lastIndex}`))
   }
   return parts.length > 0 ? parts : content
 }
 
-export const Message = memo(function Message({ message, profile, isOwn, serverEmojis = [], roleColor, parentMessage, onScrollToMessage, isHighlighted, onPin, onUnpin, reactions = [], onToggleReaction, onEdit, onReply, onOpenThread, onDelete, showReactionPicker, reactionPickerButtonRef, onOpenReactionPicker, onReactionSelect, onReactionPickerClose, serverEmojisForPicker = [], serverNameForPicker, onOpenEmojiSettings }: MessageProps) {
+export const Message = memo(function Message({ message, profile, isOwn, serverEmojis = [], roleColor, parentMessage, onScrollToMessage, isHighlighted, onPin, onUnpin, reactions = [], onToggleReaction, onEdit, onReply, onOpenThread, onDelete, showReactionPicker, reactionPickerButtonRef, onOpenReactionPicker, onReactionSelect, onReactionPickerClose, serverEmojisForPicker = [], serverNameForPicker, onOpenEmojiSettings, onCopyLink }: MessageProps) {
   const { settings } = useUserSettings()
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(message.content)
@@ -139,7 +173,7 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
     setIsEditing(false)
   }
 
-  const hasActions = onReply || onOpenThread || onToggleReaction || onDelete || onEdit || onPin || onUnpin
+  const hasActions = onReply || onOpenThread || onToggleReaction || onDelete || onEdit || onPin || onUnpin || onCopyLink
 
   const parentContent = parentMessage?.content?.trim() ?? ''
   const parentContentPreview = parentContent
@@ -259,7 +293,7 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg>
               </button>
             )}
-            {(onEdit || onDelete || onPin || onUnpin || onOpenThread) && (
+            {(onEdit || onDelete || onPin || onUnpin || onOpenThread || onCopyLink) && (
               <div className="relative" ref={moreMenuRef}>
                 <button
                   type="button"
@@ -271,6 +305,9 @@ export const Message = memo(function Message({ message, profile, isOwn, serverEm
                 </button>
                 {showMoreMenu && (
                   <div className="absolute right-0 top-full mt-1 py-1 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] shadow-xl z-50 min-w-[140px]">
+                    {onCopyLink && (
+                      <button type="button" onClick={() => { onCopyLink(); setShowMoreMenu(false) }} className="w-full px-3 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)]">Link kopieren</button>
+                    )}
                     {onOpenThread && (
                       <button type="button" onClick={() => { onOpenThread(); setShowMoreMenu(false) }} className="w-full px-3 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)]">Thread öffnen</button>
                     )}

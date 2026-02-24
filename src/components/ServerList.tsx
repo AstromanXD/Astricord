@@ -3,9 +3,8 @@
  * Zeigt nur Server, bei denen der User Mitglied ist
  */
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Server } from '../lib/supabase'
-import { useBackend, servers as apiServers } from '../lib/api'
+import { servers as apiServers } from '../lib/api'
 import { useServerPermissions } from '../hooks/useServerPermissions'
 import { ServerContextMenu } from './ServerContextMenu'
 import { CreateServerModal } from './CreateServerModal'
@@ -21,7 +20,6 @@ export const FRIENDS_ID = '__friends__'
 
 export function ServerList({ selectedServerId, onSelectServer, onOpenServerSettings }: ServerListProps) {
   const { user } = useAuth()
-  const backend = useBackend()
   const [servers, setServers] = useState<Server[]>([])
   const [loading, setLoading] = useState(true)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; server: Server } | null>(null)
@@ -37,54 +35,26 @@ export function ServerList({ selectedServerId, onSelectServer, onOpenServerSetti
       setLoading(false)
       return
     }
-    if (backend) {
-      try {
-        const data = await apiServers.list()
-        setServers(data ?? [])
-        setLoading(false)
-        if (data?.length && !hasAutoSelected.current) {
-          hasAutoSelected.current = true
-          onSelectServer(data[0].id)
-        } else if (!data?.length && !hasAutoSelected.current) {
-          hasAutoSelected.current = true
-          onSelectServer(FRIENDS_ID)
-        }
-      } catch {
-        setServers([])
-        setLoading(false)
-        if (!hasAutoSelected.current) {
-          hasAutoSelected.current = true
-          onSelectServer(FRIENDS_ID)
-        }
+    try {
+      const data = await apiServers.list()
+      setServers(data ?? [])
+      setLoading(false)
+      if (data?.length && !hasAutoSelected.current) {
+        hasAutoSelected.current = true
+        onSelectServer(data[0].id)
+      } else if (!data?.length && !hasAutoSelected.current) {
+        hasAutoSelected.current = true
+        onSelectServer(FRIENDS_ID)
       }
-      return
-    }
-    const { data: memberships } = await supabase
-      .from('server_members')
-      .select('server_id')
-      .eq('user_id', user.id)
-    const serverIds = (memberships ?? []).map((m) => m.server_id)
-    if (serverIds.length === 0) {
+    } catch {
       setServers([])
       setLoading(false)
       if (!hasAutoSelected.current) {
         hasAutoSelected.current = true
         onSelectServer(FRIENDS_ID)
       }
-      return
     }
-    const { data } = await supabase
-      .from('servers')
-      .select('*')
-      .in('id', serverIds)
-      .order('created_at')
-    setServers(data ?? [])
-    setLoading(false)
-    if (data?.length && !hasAutoSelected.current) {
-      hasAutoSelected.current = true
-      onSelectServer(data[0].id)
-    }
-  }, [user?.id, onSelectServer, backend])
+  }, [user?.id, onSelectServer])
 
   useEffect(() => {
     if (!user) hasAutoSelected.current = false

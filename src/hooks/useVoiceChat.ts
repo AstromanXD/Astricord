@@ -1,11 +1,9 @@
 /**
  * useVoiceChat - WebRTC Voice/Video Chat
- * Supabase Realtime ODER Backend WebSocket für Signaling
+ * Backend WebSocket für Signaling
  */
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
-import type { RealtimeChannel } from '@supabase/supabase-js'
-import { useBackend, createWebSocket, sendBroadcast, voice } from '../lib/api'
+import { createWebSocket, sendBroadcast, voice } from '../lib/api'
 import { playSoundVoiceJoin, playSoundVoiceLeave, playSoundMute, playSoundUnmute } from '../lib/sounds'
 import { getVoiceSettings } from '../lib/voiceSettings'
 
@@ -44,7 +42,6 @@ const SPEAKING_THRESHOLD = 0.012
 const SILENCE_DELAY_MS = 400
 
 export function useVoiceChat(userId: string | undefined, username: string, avatarUrl?: string | null): UseVoiceChatReturn {
-  const backend = useBackend()
   const [isInVoice, setIsInVoice] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
   const [isVideoOn, setIsVideoOn] = useState(false)
@@ -59,7 +56,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const currentChannelIdRef = useRef<string | null>(null)
   const pendingIceRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
-  const channelRef = useRef<RealtimeChannel | { send: (m: { type: string; event: string; payload: unknown }) => void; unsubscribe: () => void } | null>(null)
+  const channelRef = useRef<{ send: (m: { type: string; event: string; payload: unknown }) => void; unsubscribe: () => void } | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationRef = useRef<number | null>(null)
   const isSpeakingRef = useRef(false)
@@ -144,8 +141,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         const chName = `voice:${channelId}`
         const doSend = (event: string, payload: unknown) => {
           const ch = channelRef.current
-          if (ch && 'send' in ch) ch.send({ type: 'broadcast', event, payload })
-          else if (ch && typeof (ch as RealtimeChannel).send === 'function') (ch as RealtimeChannel).send({ type: 'broadcast', event, payload })
+          if (ch) ch.send({ type: 'broadcast', event, payload })
         }
         const checkSpeaking = () => {
           if (!analyserRef.current || !localStreamRef.current || !channelRef.current || !userId) return
@@ -182,14 +178,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         }
         checkSpeaking()
 
-        if (backend) {
-          await voice.join(channelId)
-        } else {
-          await supabase.from('voice_sessions').upsert(
-            { channel_id: channelId, user_id: userId, is_muted: false, has_video: false, is_screen_sharing: false },
-            { onConflict: 'channel_id,user_id' }
-          )
-        }
+        await voice.join(channelId)
 
         currentChannelIdRef.current = channelId
         setCurrentChannelId(channelId)
@@ -197,8 +186,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         setIsMuted(false)
         playSoundVoiceJoin()
 
-        if (backend) {
-          const ws = createWebSocket(chName)
+        const ws = createWebSocket(chName)
           const backendChannel = {
             send: (m: { type: string; event: string; payload: unknown }) => {
               if (m.type === 'broadcast') sendBroadcast(ws, chName, m.event, m.payload)
@@ -295,170 +283,11 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
                 .catch((err) => console.error('Create offer failed:', err))
             }
           }
-          return
-        }
-
-        const channel = supabase.channel(`voice:${channelId}`)
-        channelRef.current = channel
-
-        channel
-          .on('broadcast', { event: 'voice-join' }, ({ payload }) => {
-            if (payload.userId === userId) return
-            setVoiceUsers((prev) => {
-              if (prev.some((u) => u.userId === payload.userId)) return prev
-              return [...prev, { ...payload, hasVideo: payload.hasVideo ?? false, isScreenSharing: payload.isScreenSharing ?? false }]
-            })
-          })
-          .on('broadcast', { event: 'voice-video-update' }, ({ payload }) => {
-            setVoiceUsers((prev) =>
-              prev.map((u) => (u.userId === payload.userId ? { ...u, hasVideo: payload.hasVideo } : u))
-            )
-          })
-          .on('broadcast', { event: 'voice-screen-update' }, ({ payload }) => {
-            setVoiceUsers((prev) =>
-              prev.map((u) => (u.userId === payload.userId ? { ...u, isScreenSharing: payload.isScreenSharing } : u))
-            )
-          })
-          .on('broadcast', { event: 'voice-leave' }, ({ payload }) => {
-            setVoiceUsers((prev) => prev.filter((u) => u.userId !== payload.userId))
-            setSpeakingUserIds((prev) => {
-              const next = new Set(prev)
-              next.delete(payload.userId)
-              return next
-            })
-            peerConnectionsRef.current.get(payload.userId)?.close()
-            peerConnectionsRef.current.delete(payload.userId)
-            pendingIceRef.current.delete(payload.userId)
-            removeRemoteStream(payload.userId)
-          })
-          .on('broadcast', { event: 'voice-speaking' }, ({ payload }) => {
-            if (payload.userId !== userId) setSpeakingUserIds((prev) => new Set(prev).add(payload.userId))
-          })
-          .on('broadcast', { event: 'voice-stopped' }, ({ payload }) => {
-            setSpeakingUserIds((prev) => {
-              const next = new Set(prev)
-              next.delete(payload.userId)
-              return next
-            })
-          })
-          .on('broadcast', { event: 'webrtc-offer' }, async ({ payload }) => {
-            if (payload.toUserId !== userId) return
-            const existing = peerConnectionsRef.current.get(payload.fromUserId)
-            if (existing) {
-              existing.close()
-              peerConnectionsRef.current.delete(payload.fromUserId)
-            }
-            createPeerConnection(payload.fromUserId)
-            const pc = peerConnectionsRef.current.get(payload.fromUserId)
-            if (!pc) return
-            try {
-              await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
-              const answer = await pc.createAnswer()
-              await pc.setLocalDescription(answer)
-              channel.send({
-                type: 'broadcast',
-                event: 'webrtc-answer',
-                payload: { fromUserId: userId, toUserId: payload.fromUserId, sdp: answer },
-              })
-              const pending = pendingIceRef.current.get(payload.fromUserId) ?? []
-              for (const c of pending) await pc.addIceCandidate(new RTCIceCandidate(c))
-              pendingIceRef.current.set(payload.fromUserId, [])
-            } catch (err) {
-              console.error('Handle offer failed:', err)
-            }
-          })
-          .on('broadcast', { event: 'webrtc-answer' }, async ({ payload }) => {
-            if (payload.toUserId !== userId) return
-            const pc = peerConnectionsRef.current.get(payload.fromUserId)
-            if (!pc) return
-            try {
-              await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
-              const pending = pendingIceRef.current.get(payload.fromUserId) ?? []
-              for (const c of pending) await pc.addIceCandidate(new RTCIceCandidate(c))
-              pendingIceRef.current.set(payload.fromUserId, [])
-            } catch (err) {
-              console.error('Handle answer failed:', err)
-            }
-          })
-          .on('broadcast', { event: 'webrtc-ice' }, async ({ payload }) => {
-            if (payload.toUserId !== userId) return
-            const pc = peerConnectionsRef.current.get(payload.fromUserId)
-            if (pc?.remoteDescription) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(payload.candidate))
-              } catch (err) {
-                console.error('Add ICE candidate failed:', err)
-              }
-            } else {
-              const pending = pendingIceRef.current.get(payload.fromUserId) ?? []
-              pending.push(payload.candidate)
-              pendingIceRef.current.set(payload.fromUserId, pending)
-            }
-          })
-          .subscribe()
-
-        channel.send({
-          type: 'broadcast',
-          event: 'voice-join',
-          payload: { userId, username, avatarUrl: avatarUrl ?? null, isMuted: false, hasVideo: false, isScreenSharing: false },
-        })
-
-        const { data: sessions } = await supabase
-          .from('voice_sessions')
-          .select('user_id, is_muted, has_video, is_screen_sharing')
-          .eq('channel_id', channelId)
-
-        const existingUsers: VoiceUser[] = await Promise.all(
-          (sessions ?? [])
-            .filter((s) => s.user_id !== userId)
-            .map(async (s) => {
-              const { data: p } = await supabase
-                .from('profiles')
-                .select('username, avatar_url')
-                .eq('id', s.user_id)
-                .single()
-              return {
-                userId: s.user_id,
-                username: p?.username ?? 'Unbekannt',
-                avatarUrl: p?.avatar_url ?? null,
-                isMuted: s.is_muted,
-                hasVideo: s.has_video ?? false,
-                isScreenSharing: s.is_screen_sharing ?? false,
-              }
-            })
-        )
-        const localUser: VoiceUser = {
-          userId: userId!,
-          username,
-          avatarUrl: avatarUrl ?? null,
-          isMuted: false,
-          hasVideo: isVideoOn,
-          isScreenSharing: isScreenSharing,
-        }
-        setVoiceUsers([localUser, ...existingUsers])
-
-        for (const u of existingUsers) {
-          createPeerConnection(u.userId)
-          const pc = peerConnectionsRef.current.get(u.userId)
-          if (pc) {
-            try {
-              const offer = await pc.createOffer()
-              await pc.setLocalDescription(offer)
-              channel.send({
-                type: 'broadcast',
-                event: 'webrtc-offer',
-                payload: { fromUserId: userId, toUserId: u.userId, sdp: offer },
-              })
-            } catch (err) {
-              console.error('Create offer failed:', err)
-            }
-          }
-        }
       } catch (err) {
         console.error('Voice join failed:', err)
       }
     },
-    [userId, username, avatarUrl, createPeerConnection, removeRemoteStream, backend]
+    [userId, username, avatarUrl, createPeerConnection, removeRemoteStream]
   )
 
   const leaveVoice = useCallback(async () => {
@@ -481,15 +310,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     channelRef.current?.unsubscribe?.()
     channelRef.current = null
 
-    if (backend) {
-      await voice.leave(channelId)
-    } else {
-      await supabase
-        .from('voice_sessions')
-        .delete()
-        .eq('channel_id', channelId)
-        .eq('user_id', userId)
-    }
+    await voice.leave(channelId)
 
     localStreamRef.current?.getTracks().forEach((t) => t.stop())
     localStreamRef.current = null
@@ -509,7 +330,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     setIsInVoice(false)
     setVoiceUsers([])
     setSpeakingUserIds(new Set())
-  }, [currentChannelId, userId, backend])
+  }, [currentChannelId, userId])
 
   useEffect(() => {
     currentChannelIdRef.current = currentChannelId
@@ -563,15 +384,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
       setLocalVideoStream(null)
       setIsVideoOn(false)
     }
-    if (backend) {
-      await voice.video(currentChannelId, newVideo)
-    } else {
-      await supabase
-        .from('voice_sessions')
-        .update({ has_video: newVideo })
-        .eq('channel_id', currentChannelId)
-        .eq('user_id', userId)
-    }
+    await voice.video(currentChannelId, newVideo)
     channelRef.current?.send({
       type: 'broadcast',
       event: 'voice-video-update',
@@ -580,7 +393,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     setVoiceUsers((prev) =>
       prev.map((u) => (u.userId === userId ? { ...u, hasVideo: newVideo } : u))
     )
-  }, [isVideoOn, renegotiateAll, currentChannelId, userId, backend])
+  }, [isVideoOn, renegotiateAll, currentChannelId, userId])
 
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((t) => t.stop())
@@ -593,16 +406,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
     setIsScreenSharing(false)
     setIsVideoOn(false)
     if (currentChannelId && userId) {
-      if (backend) {
-        voice.screen(currentChannelId, false).catch(() => {})
-      } else {
-        supabase
-          .from('voice_sessions')
-          .update({ is_screen_sharing: false })
-          .eq('channel_id', currentChannelId)
-          .eq('user_id', userId)
-          .then(() => {})
-      }
+      voice.screen(currentChannelId, false).catch(() => {})
       channelRef.current?.send({
         type: 'broadcast',
         event: 'voice-screen-update',
@@ -612,7 +416,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         prev.map((u) => (u.userId === userId ? { ...u, isScreenSharing: false } : u))
       )
     }
-  }, [currentChannelId, userId, backend])
+  }, [currentChannelId, userId])
 
   const toggleScreenShare = useCallback(async () => {
     if (isScreenSharing) {
@@ -637,15 +441,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         }
         await renegotiateAll()
         if (currentChannelId && userId) {
-          if (backend) {
-            await voice.screen(currentChannelId, true)
-          } else {
-            await supabase
-              .from('voice_sessions')
-              .update({ is_screen_sharing: true })
-              .eq('channel_id', currentChannelId)
-              .eq('user_id', userId)
-          }
+          await voice.screen(currentChannelId, true)
           channelRef.current?.send({
             type: 'broadcast',
             event: 'voice-screen-update',
@@ -664,7 +460,7 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
         }
       }
     }
-  }, [isScreenSharing, stopScreenShare, renegotiateAll, currentChannelId, userId, backend])
+  }, [isScreenSharing, stopScreenShare, renegotiateAll, currentChannelId, userId])
 
   const toggleMute = useCallback(async () => {
     if (!currentChannelId || !userId) return
@@ -680,16 +476,8 @@ export function useVoiceChat(userId: string | undefined, username: string, avata
       })
     }
 
-    if (backend) {
-      await voice.mute(currentChannelId, newMuted)
-    } else {
-      await supabase
-        .from('voice_sessions')
-        .update({ is_muted: newMuted })
-        .eq('channel_id', currentChannelId)
-        .eq('user_id', userId)
-    }
-  }, [currentChannelId, userId, isMuted, backend])
+    await voice.mute(currentChannelId, newMuted)
+  }, [currentChannelId, userId, isMuted])
 
   return {
     isInVoice,

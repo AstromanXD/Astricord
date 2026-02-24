@@ -11,8 +11,7 @@ import {
   type ReactNode,
 } from 'react'
 import type { Theme } from '../lib/supabase'
-import { supabase } from '../lib/supabase'
-import { useBackend, updateProfile } from '../lib/api'
+import { updateProfile } from '../lib/api'
 import { useAuth } from './AuthContext'
 
 // CSS Variable Definitionen pro Theme
@@ -93,7 +92,6 @@ function applyTheme(theme: Theme) {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const { user, profile } = useAuth()
-  const backend = useBackend()
   const [theme, setThemeState] = useState<Theme>(profile?.theme ?? 'dark')
 
   useEffect(() => {
@@ -107,16 +105,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setThemeState(newTheme)
       applyTheme(newTheme)
       if (user) {
-        if (backend) {
-          try {
-            await updateProfile({ theme: newTheme })
-          } catch (_) {}
-        } else {
-          await supabase.from('profiles').update({ theme: newTheme }).eq('id', user.id)
-        }
+        try {
+          await updateProfile({ theme: newTheme })
+        } catch (_) {}
       }
     },
-    [user, backend]
+    [user]
   )
 
   return (

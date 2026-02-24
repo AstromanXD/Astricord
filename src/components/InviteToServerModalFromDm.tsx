@@ -2,11 +2,10 @@
  * InviteToServerModalFromDm - Server auswählen, dann Freunde einladen (aus DM)
  */
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Server, Channel } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { InviteToServerModal } from './InviteToServerModal'
-import { useBackend, servers, channels } from '../lib/api'
+import { servers, channels } from '../lib/api'
 
 interface InviteToServerModalFromDmProps {
   onClose: () => void
@@ -15,7 +14,6 @@ interface InviteToServerModalFromDmProps {
 
 export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToServerModalFromDmProps) {
   const { user } = useAuth()
-  const backend = useBackend()
   const [serversList, setServersList] = useState<Server[]>([])
   const [selectedServer, setSelectedServer] = useState<Server | null>(null)
   const [defaultChannel, setDefaultChannel] = useState<Channel | null>(null)
@@ -24,56 +22,24 @@ export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToSer
   useEffect(() => {
     if (!user) return
     const load = async () => {
-      if (backend) {
-        try {
-          const data = await servers.list()
-          setServersList(data ?? [])
-        } catch {
-          setServersList([])
-        }
-        setLoading(false)
-        return
-      }
-      const { data: memberships } = await supabase
-        .from('server_members')
-        .select('server_id')
-        .eq('user_id', user.id)
-      const serverIds = (memberships ?? []).map((m) => m.server_id)
-      if (serverIds.length === 0) {
+      try {
+        const data = await servers.list()
+        setServersList(data ?? [])
+      } catch {
         setServersList([])
-        setLoading(false)
-        return
       }
-      const { data } = await supabase
-        .from('servers')
-        .select('*')
-        .in('id', serverIds)
-        .order('created_at')
-      setServersList(data ?? [])
       setLoading(false)
     }
     load()
-  }, [user?.id, backend])
+  }, [user?.id])
 
   useEffect(() => {
     if (!selectedServer) return
-    if (backend) {
-      channels.list(selectedServer.id).then((data) => {
-        const textCh = (data ?? []).find((c) => c.type === 'text')
-        setDefaultChannel(textCh ?? null)
-      }).catch(() => setDefaultChannel(null))
-      return
-    }
-    supabase
-      .from('channels')
-      .select('*')
-      .eq('server_id', selectedServer.id)
-      .eq('type', 'text')
-      .order('created_at')
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setDefaultChannel(data))
-  }, [selectedServer?.id, backend])
+    channels.list(selectedServer.id).then((data) => {
+      const textCh = (data ?? []).find((c) => c.type === 'text')
+      setDefaultChannel(textCh ?? null)
+    }).catch(() => setDefaultChannel(null))
+  }, [selectedServer?.id])
 
   if (selectedServer) {
     return (
@@ -106,7 +72,7 @@ export function InviteToServerModalFromDm({ onClose, onInviteSent }: InviteToSer
         <div className="overflow-y-auto max-h-96 p-2">
           {loading ? (
             <div className="py-8 text-center text-[var(--text-muted)]">Laden…</div>
-          ) : servers.length === 0 ? (
+          ) : serversList.length === 0 ? (
             <div className="py-8 text-center text-[var(--text-muted)]">
               Du bist auf keinem Server. Erstelle zuerst einen Server.
             </div>

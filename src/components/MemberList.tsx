@@ -3,9 +3,8 @@
  * Rechtsklick-Kontextmenü wie bei Discord
  */
 import { useEffect, useState, useRef } from 'react'
-import { supabase } from '../lib/supabase'
 import type { Profile, ServerRole } from '../lib/supabase'
-import { useBackend, servers, blockUser } from '../lib/api'
+import { servers, blockUser } from '../lib/api'
 import { useAuth } from '../contexts/AuthContext'
 import { usePresence } from '../contexts/PresenceContext'
 import { useServerPermissions } from '../hooks/useServerPermissions'
@@ -16,6 +15,8 @@ interface MemberWithRoles {
   userId: string
   profile: Profile
   roles: ServerRole[]
+  nickname?: string | null
+  timeout_until?: string | null
 }
 
 interface MemberListProps {
@@ -25,9 +26,8 @@ interface MemberListProps {
 
 export function MemberList({ serverId, onOpenDm }: MemberListProps) {
   const { user, profile: authProfile } = useAuth()
-  const backend = useBackend()
   const { onlineUserIds } = usePresence()
-  const { canManageRoles, canKickMembers, canBanMembers } = useServerPermissions(serverId)
+  const { canManageRoles, canKickMembers, canBanMembers, canModerateMembers, canManageNicknames, canChangeNickname } = useServerPermissions(serverId)
   const [members, setMembers] = useState<MemberWithRoles[]>([])
   const [roles, setRoles] = useState<ServerRole[]>([])
   const [loading, setLoading] = useState(false)
@@ -52,67 +52,19 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
 
     const load = async () => {
       setLoading(true)
-
-      if (backend) {
-        try {
-          const data = await servers.getMembersDetail(serverId)
-          setRoles((data?.roles ?? []) as ServerRole[])
-          setMembers((data?.members ?? []) as MemberWithRoles[])
-        } catch {
-          setMembers([])
-          setRoles([])
-        }
-      } else {
-        const [rolesRes, membersRes, memberRolesRes] = await Promise.all([
-          supabase.from('server_roles').select('*').eq('server_id', serverId).order('position', { ascending: false }),
-          supabase.from('server_members').select('user_id').eq('server_id', serverId),
-          supabase.from('server_member_roles').select('user_id, role_id').eq('server_id', serverId),
-        ])
-
-        const rolesList = (rolesRes.data ?? []) as ServerRole[]
-        setRoles(rolesList)
-        const roleMap = Object.fromEntries(rolesList.map((r) => [r.id, r]))
-
-        const memberIds = [...new Set((membersRes.data ?? []).map((m) => m.user_id))]
-        const rolesByUser = new Map<string, ServerRole[]>()
-        ;(memberRolesRes.data ?? []).forEach((mr) => {
-          const role = roleMap[mr.role_id]
-          if (role) {
-            const existing = rolesByUser.get(mr.user_id) ?? []
-            if (!existing.find((r) => r.id === role.id)) {
-              rolesByUser.set(mr.user_id, [...existing, role])
-            }
-          }
-        })
-
-        if (memberIds.length === 0) {
-          setMembers([])
-          setLoading(false)
-          return
-        }
-
-        const { data: profiles } = await supabase.from('profiles').select('*').in('id', memberIds)
-        const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]))
-
-        const memberList: MemberWithRoles[] = memberIds.map((uid) => ({
-          userId: uid,
-          profile: profileMap[uid] ?? {
-            id: uid,
-            username: 'Unbekannt',
-            avatar_url: null,
-            theme: 'dark',
-            created_at: '',
-          },
-          roles: rolesByUser.get(uid) ?? [],
-        }))
-
-        setMembers(memberList)
+      try {
+        const data = await servers.getMembersDetail(serverId)
+        setRoles((data?.roles ?? []) as ServerRole[])
+        setMembers((data?.members ?? []) as MemberWithRoles[])
+      } catch {
+        setMembers([])
+        setRoles([])
       }
       setLoading(false)
     }
 
     load()
-  }, [serverId, user?.id, backend])
+  }, [serverId, user?.id])
 
   useEffect(() => {
     if (!authProfile || !user) return
@@ -132,91 +84,63 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
 
   const handleKick = async (userId: string) => {
     if (!serverId || !user) return
-    if (backend) {
-      try {
-        await servers.kickMember(serverId, userId)
-        setMembers((prev) => prev.filter((m) => m.userId !== userId))
-        setContextMenu(null)
-      } catch (_) {}
-    } else {
-      await supabase.from('server_member_roles').delete().eq('server_id', serverId).eq('user_id', userId)
-      await supabase.from('server_members').delete().eq('server_id', serverId).eq('user_id', userId)
-      await supabase.from('audit_log').insert({
-        server_id: serverId,
-        user_id: user.id,
-        action: 'member_kicked',
-        target_type: 'user',
-        target_id: userId,
-        details: { username: members.find((m) => m.userId === userId)?.profile.username },
-      })
+    try {
+      await servers.kickMember(serverId, userId)
       setMembers((prev) => prev.filter((m) => m.userId !== userId))
       setContextMenu(null)
-    }
+    } catch (_) {}
   }
 
   const handleBlock = async (userId: string) => {
     if (!user) return
-    if (backend) {
-      try {
-        await blockUser(userId)
-      } catch (_) {}
-    } else {
-      await supabase.from('blocked_users').insert({ user_id: user.id, blocked_user_id: userId })
-    }
+    try {
+      await blockUser(userId)
+    } catch (_) {}
     setContextMenu(null)
   }
 
   const handleBan = async (userId: string) => {
     if (!serverId || !user) return
-    if (backend) {
-      try {
-        await servers.banMember(serverId, userId)
-        setMembers((prev) => prev.filter((m) => m.userId !== userId))
-        setContextMenu(null)
-      } catch (_) {}
-    } else {
-      await supabase.from('server_bans').insert({
-        server_id: serverId,
-        user_id: userId,
-        banned_by: user.id,
-      })
-      await supabase.from('server_member_roles').delete().eq('server_id', serverId).eq('user_id', userId)
-      await supabase.from('server_members').delete().eq('server_id', serverId).eq('user_id', userId)
-      await supabase.from('audit_log').insert({
-        server_id: serverId,
-        user_id: user.id,
-        action: 'member_banned',
-        target_type: 'user',
-        target_id: userId,
-        details: { username: members.find((m) => m.userId === userId)?.profile.username },
-      })
+    try {
+      await servers.banMember(serverId, userId)
       setMembers((prev) => prev.filter((m) => m.userId !== userId))
       setContextMenu(null)
-    }
+    } catch (_) {}
+  }
+
+  const handleTimeout = async (userId: string, durationMinutes: number | null) => {
+    if (!serverId || !user) return
+    try {
+      const until = durationMinutes
+        ? new Date(Date.now() + durationMinutes * 60 * 1000).toISOString()
+        : null
+      await servers.setMemberTimeout(serverId, userId, until)
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.userId === userId ? { ...m, timeout_until: until } : m
+        )
+      )
+      setContextMenu(null)
+    } catch (_) {}
+  }
+
+  const handleSetNickname = async (userId: string, nickname: string) => {
+    if (!serverId || !user) return
+    try {
+      await servers.setMemberNickname(serverId, userId, nickname)
+      setMembers((prev) =>
+        prev.map((m) => (m.userId === userId ? { ...m, nickname: nickname.trim() || null } : m))
+      )
+      setContextMenu(null)
+    } catch (_) {}
   }
 
   const handleRoleToggle = async (roleId: string, add: boolean) => {
     if (!serverId || !contextMenu) return
-    if (backend) {
-      try {
-        await servers.toggleMemberRole(serverId, contextMenu.member.userId, roleId, add)
-      } catch (_) {
-        return
-      }
-    } else {
-      if (add) {
-        await supabase.from('server_member_roles').insert({
-          server_id: serverId,
-          user_id: contextMenu.member.userId,
-          role_id: roleId,
-        })
-      } else {
-        await supabase.from('server_member_roles').delete().match({
-          server_id: serverId,
-          user_id: contextMenu.member.userId,
-          role_id: roleId,
-        })
-      }
+    try {
+      await servers.toggleMemberRole(serverId, contextMenu.member.userId, roleId, add)
+    } catch (_) {
+      return
     }
     setMembers((prev) =>
       prev.map((m) => {
@@ -285,8 +209,13 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
         className={`text-sm truncate ${isOffline ? 'opacity-70' : ''}`}
         style={color ? { color } : undefined}
       >
-        {profile.username}
+        {(m as MemberWithRoles).nickname ?? profile.username}
       </span>
+      {(m as MemberWithRoles).timeout_until && new Date((m as MemberWithRoles).timeout_until!) > new Date() && (
+        <svg className="w-3.5 h-3.5 text-[var(--accent-danger)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Im Timeout">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      )}
     </div>
   )}
 
@@ -386,12 +315,48 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
       <div className="flex-1 overflow-y-auto hide-scrollbar py-2">
         {onlineCount > 0 && (
           <div className="mb-3">
-            <div className="px-3 py-1 flex items-center gap-1.5 text-[var(--accent-success)]">
-              <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent-success)] flex-shrink-0" />
-              <span className="text-xs font-semibold uppercase truncate">Online</span>
-              <span className="text-xs text-[var(--text-muted)]">— {onlineCount}</span>
-            </div>
-            {renderRoleSection(onlineByRole, onlineNoRole, (r) => r.color)}
+            {onlineCount === 1 ? (
+              onlineNoRole.length === 1 ? (
+                <div className="mb-2">
+                  <div className="px-3 py-1 flex items-center gap-1.5 text-[var(--accent-success)]">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent-success)] flex-shrink-0" />
+                    <span className="text-xs font-semibold uppercase truncate">Online</span>
+                    <span className="text-xs text-[var(--text-muted)]">— 1</span>
+                  </div>
+                  <MemberRow key={onlineNoRole[0].userId} m={onlineNoRole[0]} />
+                </div>
+              ) : (
+                roleOrder.map((role) => {
+                  const roleMembers = onlineByRole.get(role.id) ?? []
+                  if (roleMembers.length === 0) return null
+                  return (
+                    <div key={role.id} className="mb-2">
+                      <div
+                        className="px-3 py-1 flex items-center gap-1.5 cursor-default"
+                        style={{ color: role.color }}
+                      >
+                        <span
+                          className="w-3 h-3 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: role.color }}
+                        />
+                        <span className="text-xs font-semibold uppercase truncate">{role.name}</span>
+                        <span className="text-xs text-[var(--text-muted)]">— 1</span>
+                      </div>
+                      <MemberRow key={roleMembers[0].userId} m={roleMembers[0]} color={role.color} />
+                    </div>
+                  )
+                })
+              )
+            ) : (
+              <>
+                <div className="px-3 py-1 flex items-center gap-1.5 text-[var(--accent-success)]">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent-success)] flex-shrink-0" />
+                  <span className="text-xs font-semibold uppercase truncate">Online</span>
+                  <span className="text-xs text-[var(--text-muted)]">— {onlineCount}</span>
+                </div>
+                {renderRoleSection(onlineByRole, onlineNoRole, (r) => r.color)}
+              </>
+            )}
           </div>
         )}
         {offlineMembers.length > 0 && (
@@ -444,6 +409,8 @@ export function MemberList({ serverId, onOpenDm }: MemberListProps) {
           onKick={canKickMembers ? handleKick : undefined}
           onBan={canBanMembers ? handleBan : undefined}
           onBlock={handleBlock}
+          onTimeout={canModerateMembers ? handleTimeout : undefined}
+          onSetNickname={(canManageNicknames || (contextMenu.member.userId === user?.id && canChangeNickname)) ? handleSetNickname : undefined}
         />
       )}
     </div>

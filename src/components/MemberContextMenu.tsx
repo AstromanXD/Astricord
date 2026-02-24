@@ -21,6 +21,8 @@ interface MemberContextMenuProps {
   onKick?: (userId: string) => void
   onBan?: (userId: string) => void
   onBlock?: (userId: string) => void
+  onTimeout?: (userId: string, durationMinutes: number | null) => void
+  onSetNickname?: (userId: string, nickname: string) => void
 }
 
 export function MemberContextMenu({
@@ -40,9 +42,12 @@ export function MemberContextMenu({
   onKick,
   onBan,
   onBlock,
+  onTimeout,
+  onSetNickname,
 }: MemberContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [rolesOpen, setRolesOpen] = useState(false)
+  const [timeoutOpen, setTimeoutOpen] = useState(false)
 
   useEffect(() => {
     const handleClick = () => onClose()
@@ -153,6 +158,86 @@ export function MemberContextMenu({
                     </span>
                   </label>
                 ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {onSetNickname && (
+        <>
+          <div className="my-1 border-t border-[var(--border)]" />
+          <button
+            onClick={() => {
+              const current = (member as { nickname?: string | null }).nickname ?? member.profile.username
+              const val = window.prompt('Nickname (leer = entfernen):', current)
+              if (val !== null) {
+                onSetNickname(member.userId, val)
+                onClose()
+              }
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)] flex items-center gap-2"
+          >
+            <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+            Nickname ändern
+          </button>
+        </>
+      )}
+
+      {!isSelf && onTimeout && (
+        <>
+          <div className="my-1 border-t border-[var(--border)]" />
+          <div
+            className="relative"
+            onMouseEnter={() => setTimeoutOpen(true)}
+            onMouseLeave={() => setTimeoutOpen(false)}
+          >
+            <button
+              className="w-full px-3 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)] flex items-center justify-between"
+            >
+              <span className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Timeout
+              </span>
+              <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            {timeoutOpen && (
+              <div className="absolute left-full top-0 ml-1 min-w-[140px] py-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] shadow-xl">
+                {[
+                  [5, '5 Min'],
+                  [10, '10 Min'],
+                  [60, '1 Stunde'],
+                  [1440, '1 Tag'],
+                  [10080, '1 Woche'],
+                ].map(([min, label]) => (
+                  <button
+                    key={min}
+                    type="button"
+                    onClick={() => {
+                      onTimeout(member.userId, min as number)
+                      onClose()
+                    }}
+                    className="w-full px-3 py-2 text-left text-sm text-[var(--text-primary)] hover:bg-[var(--bg-modifier-hover)]"
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onTimeout(member.userId, null)
+                    onClose()
+                  }}
+                  className="w-full px-3 py-2 text-left text-sm text-[var(--text-muted)] hover:bg-[var(--bg-modifier-hover)]"
+                >
+                  Timeout aufheben
+                </button>
               </div>
             )}
           </div>

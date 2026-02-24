@@ -5,8 +5,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useUserSettings } from '../contexts/UserSettingsContext'
-import { useBackend, updateProfile } from '../lib/api'
-import { supabase } from '../lib/supabase'
+import { updateProfile } from '../lib/api'
 
 interface VoiceUser {
   userId: string
@@ -44,7 +43,6 @@ export function UserProfilePopup({
 }: UserProfilePopupProps) {
   const { user, profile, signOut, refreshProfile } = useAuth()
   const { settings: userSettings } = useUserSettings()
-  const backend = useBackend()
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false)
   const [sprachstatusMenuOpen, setSprachstatusMenuOpen] = useState(false)
   const [promoDismissed, setPromoDismissed] = useState(() => {
@@ -91,11 +89,7 @@ export function UserProfilePopup({
   const setStatus = async (status: StatusType) => {
     if (!user) return
     try {
-      if (backend) {
-        await updateProfile({ status })
-      } else {
-        await supabase.from('profiles').update({ status }).eq('id', user.id)
-      }
+      await updateProfile({ status })
       await refreshProfile()
       setStatusDropdownOpen(false)
     } catch (err) {

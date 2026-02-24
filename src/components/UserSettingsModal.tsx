@@ -5,8 +5,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
-import { useBackend, updateProfile } from '../lib/api'
-import { supabase } from '../lib/supabase'
+import { updateProfile } from '../lib/api'
 import type { Theme } from '../lib/supabase'
 import {
   getVoiceSettings,
@@ -39,7 +38,6 @@ interface UserSettingsModalProps {
 export function UserSettingsModal({ onClose, initialTab }: UserSettingsModalProps) {
   const { user, profile, refreshProfile, signOut } = useAuth()
   const { theme, setTheme } = useTheme()
-  const backend = useBackend()
   const [tab, setTab] = useState<Tab>(initialTab ?? 'profil')
   const [voiceSubTab, setVoiceSubTab] = useState<VoiceSubTab>('sprachchat')
   const [voiceSettings, setVoiceSettingsState] = useState<VoiceSettings>(getVoiceSettings)
@@ -495,11 +493,7 @@ export function UserSettingsModal({ onClose, initialTab }: UserSettingsModalProp
                       custom_status: customStatus.trim() || null,
                       status: profileStatus,
                     }
-                    if (backend) {
-                      await updateProfile(data)
-                    } else {
-                      await supabase.from('profiles').update(data).eq('id', user.id)
-                    }
+                    await updateProfile(data)
                     await refreshProfile()
                   }}
                   className="px-4 py-2 rounded bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white font-medium"
